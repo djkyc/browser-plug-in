@@ -520,7 +520,8 @@ async function refreshUpdateStatus() {
       el.innerHTML = '';
       el.append(document.createTextNode(`上次检查 ${t}：有新版 v${updateInfo.latestVersion}，`));
       const a = document.createElement('a');
-      a.href = updateInfo.releaseUrl || '#'; a.target = '_blank'; a.textContent = '点这里去 GitHub 下载';
+      // v1.15.48：直接下 zip，不再跳发布页（发布页还得再点一次 zip 才能下）
+      a.href = updateInfo.downloadUrl || updateInfo.releaseUrl || '#'; a.target = '_blank'; a.textContent = '点这里下载新版 zip';
       el.append(a);
       el.append(document.createTextNode('（解压覆盖安装后刷新）。'));
     } else {

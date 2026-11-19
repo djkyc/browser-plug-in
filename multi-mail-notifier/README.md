@@ -1,5 +1,8 @@
-# Multi Mail Notifier v1.15.47
+# Multi Mail Notifier v1.15.48
 Multi Mail Notifier 是一款适用于 Chrome、Edge、Firefox、Dia 和 Brave 的免费浏览器扩展（Gmail 通知工具）：它检查浏览器里登录的每个 Gmail 账号和你添加的 Outlook.com 账号、Proton 账号，只提醒需要你处理的邮件，并让登录验证码一键可用。
+
+## v1.15.48：更新提示点一下直接下载 zip
+- 设置页“更新”区查到新版时，链接改成直接下 zip（`downloadUrl`），不再跳发布页——之前点链接是打开发布页，还得再点一次 zip 才能下。
 
 ## v1.15.47：联系作者加 Telegram
 - 设置页“联系作者”卡和 README 底部加了 Telegram：[@djkyc](https://t.me/djkyc)。
