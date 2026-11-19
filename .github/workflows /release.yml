@@ -1,0 +1,99 @@
+# multi-mail-notifier 自动发布
+# 用法（每次发新版只做这 3 步，剩下的全自动）：
+#   1. 改代码，multi-mail-notifier/manifest.json 里版号升一位（比如 1.15.46 → 1.15.47）
+#   2. git add / git commit / git push 到 main
+#   3. 打 tag 并推上去：git tag multi-mail-notifier-v1.15.47 && git push origin multi-mail-notifier-v1.15.47
+# 工作流收到 tag 后自动做：
+#   - 校验 manifest.json 的版号跟 tag 对得上（对不上就报错停住，防止发错版）
+#   - 按 tag 生成 multi-mail-notifier/version.json（version / url / download）
+#   - 把 multi-mail-notifier/ 文件夹打成 multi-mail-notifier-v1.15.47.zip
+#   - 在 GitHub 上建 Release（tag 就是这次的 tag），把 zip 传上去
+#   - 把新版的 version.json 提交回 main（以后你不用再手动改 version.json 了）
+# 扩展那边每 12 小时读一次 version.json，读到新版就弹通知，用户点通知去下载。
+name: Release multi-mail-notifier
+
+on:
+  push:
+    tags:
+      - 'multi-mail-notifier-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#multi-mail-notifier-v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG, version: $VERSION"
+
+      - name: Check manifest version matches tag
+        run: |
+          MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('multi-mail-notifier/manifest.json'))['version'])")
+          echo "manifest.json version: $MANIFEST_VERSION"
+          if [ "$MANIFEST_VERSION" != "${{ steps.ver.outputs.version }}" ]; then
+            echo "::error::manifest.json version ($MANIFEST_VERSION) does not match tag version (${{ steps.ver.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Write version.json
+        run: |
+          python3 - <<'PY'
+          import json
+          version = "${{ steps.ver.outputs.version }}"
+          data = {
+              "version": version,
+              "url": f"https://github.com/djkyc/browser-plug-in/releases/tag/multi-mail-notifier-v{version}",
+              "download": f"https://github.com/djkyc/browser-plug-in/releases/download/multi-mail-notifier-v{version}/multi-mail-notifier-v{version}.zip",
+          }
+          with open("multi-mail-notifier/version.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False)
+              f.write("\n")
+          print(open("multi-mail-notifier/version.json", encoding="utf-8").read())
+          PY
+
+      - name: Build zip
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          zip -r "multi-mail-notifier-v${VERSION}.zip" multi-mail-notifier -x "*/.git/*" "*/node_modules/*"
+          unzip -l "multi-mail-notifier-v${VERSION}.zip" | tail -5
+          ls -lh "multi-mail-notifier-v${VERSION}.zip"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          gh release create "$TAG" \
+            --title "multi-mail-notifier v$VERSION" \
+            --generate-notes \
+            "multi-mail-notifier-v${VERSION}.zip"
+
+      - name: Commit version.json back to main
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 先把刚生成的 version.json 存到 /tmp，再强制切回 main（工作区有改动，直接切会报错）
+          cp multi-mail-notifier/version.json /tmp/version.json
+          git checkout -f main
+          cp /tmp/version.json multi-mail-notifier/version.json
+          git add multi-mail-notifier/version.json
+          if git diff --cached --quiet; then
+            echo "version.json already up to date on main, nothing to commit"
+          else
+            git commit -m "chore: bump multi-mail-notifier version.json to v$VERSION"
+            git push origin main
+          fi
