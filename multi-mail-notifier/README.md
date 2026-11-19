@@ -1,5 +1,10 @@
-# Multi Mail Notifier v1.15.45
-Multi Mail Notifier 是一款适用于 Chrome、Edge 和 Firefox 的免费浏览器扩展（Gmail 通知工具）：它检查浏览器里登录的每个 Gmail 账号和你添加的 Outlook.com 账号、Proton 账号，只提醒需要你处理的邮件，并让登录验证码一键可用。
+# Multi Mail Notifier v1.15.46
+Multi Mail Notifier 是一款适用于 Chrome、Edge、Firefox、Dia 和 Brave 的免费浏览器扩展（Gmail 通知工具）：它检查浏览器里登录的每个 Gmail 账号和你添加的 Outlook.com 账号、Proton 账号，只提醒需要你处理的邮件，并让登录验证码一键可用。
+
+## v1.15.46：补版权说明 + 支持 Dia 和 Brave
+- **版权**：扩展文件夹里加了 `LICENSE`（Apache License 2.0，跟仓库根目录那份一样），README 底部加了版权说明。Copyright © 2026 djkyc。
+- **支持的浏览器**：Chrome、Edge、Firefox、Dia、Brave 都能用。Dia 和 Brave 都是 Chromium 内核，跟 Chrome 一个引擎，所以**同一份代码、同一个 zip**，不用单独打包。装法都一样：打开浏览器的扩展页 → 开开发者模式 → “加载已解压的扩展程序” → 选这个文件夹。Chromium 浏览器扩展页地址：Chrome 是 `chrome://extensions/`，Edge 是 `edge://extensions/`，Brave 是 `brave://extensions/`，Dia 是 `dia://extensions/`；Firefox 是 `about:debugging` → “此 Firefox” → “临时载入附加组件”（临时加载，重启失效；想长期用要走 Firefox 附加组件站签名发布）。
+- 上架应用商店的话，一个 Chrome 应用商店的上架能覆盖 Chrome、Edge、Dia、Brave（都是 Chromium，都能从 Chrome 应用商店装扩展）；Edge 附加组件站和 Firefox 附加组件站是另外两个商店，要分开上架。
 
 ## v1.15.45：更新检查改读 version.json（仓库是 browser-plug-in）
 - 仓库是 `djkyc/browser-plug-in`（一个仓库放多个插件，扩展在 `multi-mail-notifier/` 文件夹里），Release 是整个仓库共用的，查 Releases API 会拿到别的插件的版本，所以更新检查改成读本插件文件夹里的 `version.json`（`https://raw.githubusercontent.com/djkyc/browser-plug-in/main/multi-mail-notifier/version.json`），里面写最新版号和下载链接。manifest 的 host 权限也从 `api.github.com` 换成 `raw.githubusercontent.com`。
@@ -132,7 +137,10 @@ Multi Mail Notifier 是一款适用于 Chrome、Edge 和 Firefox 的免费浏览
 - 自定义邮箱不用手动留标签页：先试 SID 后台查，查不到就由扩展自己开一个固定、不激活的后台标签页，关了自动重开。
 
 ## 安装
-Chrome → chrome://extensions/ → 开发者模式 → 加载已解压的扩展程序 → 选本文件夹，或去 GitHub Releases 下 zip、解压后加载。
+Chrome → chrome://extensions/，Edge → edge://extensions/，Brave → brave://extensions/，Dia → dia://extensions/ → 开发者模式 → 加载已解压的扩展程序 → 选本文件夹；Firefox → about:debugging → 此 Firefox → 临时载入附加组件（临时加载，重启失效）。或去 GitHub Releases 下 zip、解压后加载。
 **注意：必须解压覆盖原来那个文件夹再点刷新，不要移除重装、不要换文件夹**，否则扩展 ID 变了、账号和 token 全丢。
 装好后：设置页 Outlook 区域每个号点“登录”，在微软登录页选号登入即可。
 新版本发布到 GitHub Releases 后，扩展（开着自动检查更新时）会弹通知提醒，点通知去下载新 zip，同样解压覆盖 + 刷新。
+
+## 版权
+Copyright © 2026 djkyc。本扩展按 Apache License 2.0 授权，详见文件夹里的 `LICENSE`（仓库根目录也有一份）。

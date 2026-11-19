@@ -524,7 +524,7 @@ async function refreshUpdateStatus() {
       el.append(a);
       el.append(document.createTextNode('（解压覆盖安装后刷新）。'));
     } else {
-      el.textContent = `上次检查 ${t}：已是最新版 v${updateInfo.latestVersion || updateInfo.curVersion}。`;
+      el.textContent = `上次检查 ${t}：已是最新版 v${updateInfo.curVersion || updateInfo.latestVersion}。`;
     }
   } catch {}
 }
