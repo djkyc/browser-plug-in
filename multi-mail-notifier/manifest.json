@@ -33,7 +33,7 @@
       "run_at": "document_idle"
     }
   ],
-  "description": "Multi Mail Notifier 是一款适用于 Chrome、Edge 和 Firefox 的免费浏览器扩展（Gmail 通知工具）：它检查浏览器里登录的每个 Gmail 账号和你添加的 Outlook.com 账号、Proton 账号，只提醒需要你处理的邮件，并让登录验证码一键可用。",
+  "description": "Check unread mail across Gmail, Outlook, Hotmail, Live and Proton accounts in one popup. No password needed.",
   "host_permissions": [
     "https://mail.google.com/*",
     "https://gmail.googleapis.com/*",
@@ -51,7 +51,10 @@
     "https://dav.jianguoyun.com/*",
     "https://dav.infini-cloud.net/*",
     "https://higa.teracloud.jp/*",
-    "https://raw.githubusercontent.com/*"
+    "https://raw.githubusercontent.com/*",
+    "https://translate.googleapis.com/*",
+    "https://clients5.google.com/*",
+    "https://api.mymemory.translated.net/*"
   ],
   "optional_host_permissions": [
     "https://*/*"
@@ -72,5 +75,5 @@
     "webRequest",
     "identity"
   ],
-  "version": "1.15.50"
+  "version": "1.15.55"
 }

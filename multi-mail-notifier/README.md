@@ -1,5 +1,35 @@
-# Multi Mail Notifier v1.15.48
+# Multi Mail Notifier v1.15.55
 Multi Mail Notifier 是一款适用于 Chrome、Edge、Firefox、Dia 和 Brave 的免费浏览器扩展（Gmail 通知工具）：它检查浏览器里登录的每个 Gmail 账号和你添加的 Outlook.com 账号、Proton 账号，只提醒需要你处理的邮件，并让登录验证码一键可用。
+
+## v1.15.55：修验证码误认（QQ 号当验证码）
+
+提验证码前先去掉邮箱地址和网址，再删掉“没关键词也抓任意 4-8 位数字”的兜底——只认“验证码”等关键词附近的数字。之前 `56959566@qq.com` 里的 QQ 号会被当成验证码显示。真验证码（关键词在旁边）不受影响。
+
+## v1.15.54：翻译主接口换成 clients5
+
+翻译主接口从 gtx 换成 `clients5.google.com/translate_a/t?client=dict-chrome-ex`（POST，一次约 4500 字，返回 [["译文","源语言"]]）：gtx 在数据中心/共享 IP 上容易被 429，clients5 更抗限流（2026-11-19 实测本机 gtx 被拦、clients5 POST 正常，本机 VM 共享 IP 上 clients5 也通）。兜底顺序：clients5 → gtx → MyMemory。
+
+## v1.15.53：正文翻译（Google 免费接口）+ 检查间隔改 30 秒
+
+检查间隔默认从 1 分钟改成 30 秒（0.5 分钟）：Chrome 重复闹钟最小 1 分钟，所以 30 秒用一次性闹钟连锁实现（响一次再设下一个），带防重叠保护（上次检查没跑完就跳过这次）。设置页间隔输入框最小改成 0.5 分钟，步长 0.5。老默认 1 分钟一次性迁移到 0.5 分钟（只迁一次；之后在设置页改回 1 分钟不会被再改回去）。
+
+## v1.15.53：正文翻译（Google 免费接口）
+
+弹窗读邮件时，工具行多了个“翻译”：点一下把正文翻成简体中文（Google 免费接口，不用 key、不存账号；主接口 clients5，依次兜底 gtx、MyMemory），再点“原文”切回来；译文缓存，切换不重复请求；正文已是中文就不发请求。长正文按段落分块翻，换行还在。
+
+## v1.15.52：manifest 描述改短（为上架 Edge）
+- Edge 要求 manifest 的 description 最多 132 个字符，原中文描述超长导致上传校验失败。改成英文短描述：“Check unread mail across Gmail, Outlook, Hotmail, Live and Proton accounts in one popup. No password needed.”（105 字符）。
+
+## v1.15.51：加隐私政策（为上架 Edge 准备）
+- 新增 PRIVACY.md（扩展文件夹内，GitHub 上可公开访问，供商店隐私政策链接用）。功能无改动。
+
+## v1.15.50：rail 圆标改两个色
+- Hotmail 改 #fa6604、Outlook 改 #1a4bbb（用户 15:13 改的色值）；Proton #d444f1、Gmail #12b76a、Live #2cb2fc 不动。
+- 这两个新色都是深色，字母恢复白字（亮度判断自动切，不用改代码）。
+
+## v1.15.49：弹窗左侧 rail 圆标按服务商固定着色
+- 首字母圆标不再按账号 hash 随机挑色，改成按服务商固定：Proton #d444f1、Gmail #12b76a、Outlook #7ddeff、Hotmail #fdc347、Live #2cb2fc；其它后缀（认不出的域名）按账号 hash 从另一组颜色里稳定挑一个，避开上面五个避免撞色。
+- 字母颜色按底色亮度自动切：Outlook #7ddeff 和 Hotmail #fdc347 是浅色，字母用深色字，不然白字看不清；深底还是白字。
 
 ## v1.15.48：更新提示点一下直接下载 zip
 - 设置页“更新”区查到新版时，链接改成直接下 zip（`downloadUrl`），不再跳发布页——之前点链接是打开发布页，还得再点一次 zip 才能下。

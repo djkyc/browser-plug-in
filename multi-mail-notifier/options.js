@@ -105,7 +105,7 @@ async function load() {
     tr.append(td);
     tbody.append(tr);
   }
-  document.getElementById('interval').value = settings.intervalMinutes ?? 1;
+  document.getElementById('interval').value = settings.intervalMinutes ?? 0.5;
   document.getElementById('desktopNotif').checked = settings.desktopNotif !== false;
   document.getElementById('autoUpdateCheck').checked = settings.autoUpdateCheck !== false;
   refreshUpdateStatus();
@@ -488,7 +488,7 @@ document.getElementById('discoverOutlookBtn').onclick = async () => {
 
 document.getElementById('saveBtn').onclick = async () => {
   const settings = {
-    intervalMinutes: Math.max(1, parseInt(document.getElementById('interval').value, 10) || 1),
+    intervalMinutes: Math.max(0.5, parseFloat(document.getElementById('interval').value) || 0.5),
     desktopNotif: document.getElementById('desktopNotif').checked,
     autoUpdateCheck: document.getElementById('autoUpdateCheck').checked,
     sound: document.getElementById('sound').checked,
@@ -499,7 +499,10 @@ document.getElementById('saveBtn').onclick = async () => {
     badgeColor: document.getElementById('badgeColor').value,
   };
   await chrome.storage.local.set({ settings });
-  chrome.alarms.create('mmn-check', { periodInMinutes: settings.intervalMinutes });
+  // v1.15.53：间隔 <1 分钟用一次性闹钟（Chrome 重复闹钟最小 1 分钟），≥1 分钟用重复闹钟
+  await chrome.alarms.clear('mmn-check');
+  if (settings.intervalMinutes >= 1) chrome.alarms.create('mmn-check', { periodInMinutes: settings.intervalMinutes });
+  else chrome.alarms.create('mmn-check', { delayInMinutes: settings.intervalMinutes });
   // v1.15.44：自动更新开关——开就建 12 小时定时检查，关就清掉
   if (settings.autoUpdateCheck !== false) chrome.alarms.create('mmn-update-check', { periodInMinutes: 720 });
   else chrome.alarms.clear('mmn-update-check');

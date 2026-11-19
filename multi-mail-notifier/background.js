@@ -21,7 +21,7 @@
 importScripts('outlook-oauth.js', 'gmail-oauth.js');
 
 const DEFAULT_SETTINGS = {
-  intervalMinutes: 1,      // 轮询间隔（分钟），alarms 定时跑 checkAll
+  intervalMinutes: 0.5,    // 轮询间隔（分钟），0.5 = 30 秒；Chrome 重复闹钟最小 1 分钟，<1 分钟时用一次性闹钟连锁
   desktopNotif: true,      // 新邮件桌面通知
   sound: false,            // 新邮件提示音（用 WebAudio 哔一声，不用音频文件）
   onlyImportant: false,    // 只提醒含验证码的邮件（Peekat 思路：安静，只报重要的）
@@ -267,15 +267,19 @@ async function openMessage(accountId, messageId) {
 // 注意：列表里只扫标题+摘要，正文里的码要靠读正文时再提（见 mmn-gmail-body / mmn-outlook-body）。
 function extractCode(text) {
   if (!text) return null;
-  const t = String(text);
+  // v1.15.55：先去掉邮箱地址和网址——里面的数字（QQ 号、订单号等）不是验证码。
+  // 如 56959566@qq.com 里的 56959566 曾被误认成验证码。
+  const t = String(text)
+    .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ');
   const KW = '(?:验证码|驗證碼|verification\\s*code|verify\\s*code|otp|one[\\s-]?time(?:\\s*pass)?\\s*code|动态码|动态密码|校验码|确认码|安全码|auth(?:entication)?\\s*code|login\\s*code|sign[\\s-]?in\\s*code|code)';
   let m = t.match(new RegExp(KW + '[^0-9]{0,20}([0-9]{4,8})\\b', 'i'));
   if (m) return m[1];
   m = t.match(new RegExp('\\b([0-9]{4,8})\\b[^0-9]{0,20}' + KW, 'i'));
   if (m) return m[1];
-  const all = [...t.matchAll(/\b(\d{4,8})\b/g)].map(x => x[1]);
-  const nonYear = all.filter(n => !(n.length === 4 && +n >= 1900 && +n <= 2099));
-  return nonYear.find(n => n.length === 6) || nonYear[0] || null;
+  // v1.15.55：删掉无关键词兜底——以前没关键词也抓任意 4-8 位数字，
+  // 会把 QQ 号、订单号、金额等误认成验证码。只认关键词附近的数字。
+  return null;
 }
 
 async function getSettings() {
@@ -696,15 +700,36 @@ async function migrateGooglePublicToOwn() {
     }
   } catch { /* 迁移失败不影响运行 */ }
 }
+// v1.15.53：检查间隔改成 30 秒（0.5 分钟）。Chrome 重复闹钟最小 1 分钟，
+// 所以 <1 分钟时用一次性闹钟连锁：响一次就再设下一个 delayInMinutes=0.5 的。
+let checkRunning = false;
+async function scheduleCheckAlarm() {
+  const settings = await getSettings();
+  const mins = settings.intervalMinutes || 0.5;
+  await chrome.alarms.clear('mmn-check');
+  if (mins >= 1) chrome.alarms.create('mmn-check', { periodInMinutes: mins });
+  else chrome.alarms.create('mmn-check', { delayInMinutes: mins });
+}
+// 一次性迁移：老默认 1 分钟改成 0.5 分钟（只跑一次；用户后来在设置页改回 1 分钟不会被再改回去）
+async function migrateIntervalToHalfMinute() {
+  const data = await chrome.storage.local.get(['settings', 'intervalMigratedTo05']);
+  if (data.intervalMigratedTo05) return;
+  await chrome.storage.local.set({ intervalMigratedTo05: true });
+  if (data.settings && data.settings.intervalMinutes === 1) {
+    data.settings.intervalMinutes = 0.5;
+    await chrome.storage.local.set({ settings: data.settings });
+  }
+}
 chrome.runtime.onInstalled.addListener(async () => {
   await migrateMsThunderbirdToOwn();
   await migrateGooglePublicToOwn();
   await dropCustomAccounts();
   await dropLegacyOutlookData();
   await dedupeOutlookAccounts(await getAccounts());
+  await migrateIntervalToHalfMinute();
   const settings = await getSettings();
   await chrome.storage.local.set({ settings });
-  chrome.alarms.create('mmn-check', { periodInMinutes: Math.max(1, settings.intervalMinutes || 1) });
+  await scheduleCheckAlarm();
   await setupUpdateAlarm();
   // 首次安装：自动发现已登录的 Gmail 账号
   await checkAll({ discover: true });
@@ -716,8 +741,9 @@ chrome.runtime.onStartup.addListener(async () => {
   await dropCustomAccounts();
   await dropLegacyOutlookData();
   await dedupeOutlookAccounts(await getAccounts());
+  await migrateIntervalToHalfMinute();
   const settings = await getSettings();
-  chrome.alarms.create('mmn-check', { periodInMinutes: Math.max(1, settings.intervalMinutes || 1) });
+  await scheduleCheckAlarm();
   await setupUpdateAlarm();
   // v1.15.44：启动时如果开了自动检查、且上次检查超过 6 小时，就查一次新版本
   if (settings.autoUpdateCheck !== false) {
@@ -731,8 +757,15 @@ chrome.runtime.onStartup.addListener(async () => {
   await checkAll({ discover: true });
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'mmn-check') checkAll({ discover: false });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'mmn-check') {
+    // 一次性闹钟连锁：响完再设下一个；检查已在跑就跳过这次，避免重叠
+    const settings = await getSettings();
+    if ((settings.intervalMinutes || 0.5) < 1) await scheduleCheckAlarm();
+    if (checkRunning) return;
+    checkRunning = true;
+    try { await checkAll({ discover: false }); } finally { checkRunning = false; }
+  }
   if (alarm.name === 'mmn-update-check') checkForUpdate();
 });
 
@@ -897,6 +930,84 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   })();
   return true;
 });
+
+// v1.15.53：正文翻译（Google 免费接口，无需 key；sl=auto 识源语言，tl=zh-CN 译成简体中文）
+// 弹窗发 mmn-translate { text }，后台按段落分块（每块 ≤3800 字）逐块翻译，译文按原段落拼回。
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'mmn-translate') return;
+  (async () => {
+    try {
+      const text = String(msg.text || '');
+      if (!text.trim()) { sendResponse({ ok: false, error: '没有可翻译的正文' }); return; }
+      sendResponse({ ok: true, text: await translateText(text) });
+    } catch (e) {
+      sendResponse({ ok: false, error: '翻译失败：' + (e && e.message ? e.message : '网络错误') });
+    }
+  })();
+  return true;
+});
+async function translateText(text) {
+  // 先按行切，单行超长再硬切成 ≤3800 的段
+  const pieces = [];
+  for (const line of text.split('\n')) {
+    if (line.length <= 3800) { pieces.push(line); continue; }
+    for (let i = 0; i < line.length; i += 3800) pieces.push(line.slice(i, i + 3800));
+  }
+  // 把行拼成 ≤3800 的块（尽量不断段）
+  const chunks = [];
+  let cur = '';
+  for (const p of pieces) {
+    if (cur && (cur + '\n' + p).length > 3800) { chunks.push(cur); cur = p; }
+    else cur = cur ? cur + '\n' + p : p;
+  }
+  if (cur) chunks.push(cur);
+  // 翻译接口优先级：clients5（POST，最抗限流）→ gtx（GET）→ MyMemory；
+  // 一旦某接口失败就整篇切到下一个，不再每块都试。
+  const providers = [translateViaClients5, translateViaGoogle, translateViaMyMemory];
+  let providerIdx = 0;
+  const out = [];
+  for (const c of chunks) {
+    let t = '';
+    while (providerIdx < providers.length) {
+      try { t = await providers[providerIdx](c); break; }
+      catch (e) { providerIdx++; }
+    }
+    if (providerIdx >= providers.length) throw new Error('翻译失败：三个接口都不可用');
+    out.push(t);
+  }
+  return out.join('\n');
+}
+// clients5 谷歌翻译接口（POST，client=dict-chrome-ex；无需 key；单次约 4500 字；返回 [["译文","源语言"]])
+async function translateViaClients5(text) {
+  const body = new URLSearchParams();
+  body.set('sl', 'auto');
+  body.set('tl', 'zh-CN');
+  body.set('q', text);
+  const r = await fetch('https://clients5.google.com/translate_a/t?client=dict-chrome-ex', { method: 'POST', body });
+  if (!r.ok) throw new Error('clients5 HTTP ' + r.status);
+  const data = await r.json();
+  const t = data && data[0] && data[0][0];
+  if (!t) throw new Error('clients5 返回异常');
+  return t;
+}
+// Google 免费翻译接口（无需 key；sl=auto 识源语言）
+async function translateViaGoogle(text) {
+  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=' + encodeURIComponent(text);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Google HTTP ' + r.status);
+  const data = await r.json();
+  return data && data[0] ? data[0].map(s => (s && s[0]) || '').join('') : '';
+}
+// MyMemory 免费翻译兜底（无需 key；匿名每天 5000 字）。配额用完会回 429 或 WARNING 文本，都当失败抛掉。
+async function translateViaMyMemory(text) {
+  const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=' + encodeURIComponent('auto|zh-CN');
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('MyMemory HTTP ' + r.status);
+  const data = await r.json();
+  const t = data && data.responseData && data.responseData.translatedText;
+  if (data.responseStatus !== 200 || !t || /MYMEMORY WARNING/i.test(t)) throw new Error('MyMemory 不可用');
+  return t;
+}
 
 // 设置页发来的 Gmail 登录：跑 OAuth 流程，成功后马上用 Gmail API 查一次未读（不弹通知）
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

@@ -9,12 +9,34 @@ const STATUS_TEXT = {
 let lastMeta = { total: 0, enabledCount: 0, interval: 1 };
 // v1.15.26：左侧图标栏选中的账号（null = 全部账号）；点图标切换，点已选中的再点回全部
 let selectedAccId = null;
-const RAIL_COLORS = ['#f04438', '#f79009', '#12b76a', '#2e90fa', '#7a5af8', '#ec4899', '#06aed4', '#d444f1'];
+// v1.15.49：rail 首字母圆标按服务商固定着色（用户 15:02 定的色值）：
+// Proton #d444f1、Gmail #12b76a、Outlook #7ddeff、Hotmail #fdc347、Live #2cb2fc。
+// v1.15.50（用户 15:13 改色）：Hotmail 改 #fa6604、Outlook 改 #1a4bbb，其它不动。
+// 其它后缀（iconKindForEmail 认不出的）：按账号 hash 从 RAIL_OTHER_COLORS 稳定挑一个，
+// 避开上面五个服务商色，避免撞色。
+const RAIL_PROVIDER_COLORS = {
+  proton: '#d444f1',
+  gmail: '#12b76a',
+  outlook: '#1a4bbb',
+  hotmail: '#fa6604',
+  live: '#2cb2fc',
+};
+const RAIL_OTHER_COLORS = ['#f04438', '#f79009', '#2e90fa', '#7a5af8', '#ec4899', '#06aed4', '#667085', '#98a2b3'];
 function railColorFor(acc) {
+  const kind = iconKindForEmail(acc.email) || acc.provider;
+  if (kind && RAIL_PROVIDER_COLORS[kind]) return RAIL_PROVIDER_COLORS[kind];
   let h = 0;
   const s = acc.id || acc.email || '';
   for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return RAIL_COLORS[h % RAIL_COLORS.length];
+  return RAIL_OTHER_COLORS[h % RAIL_OTHER_COLORS.length];
+}
+// 圆标上的字母颜色：亮底（Outlook #7ddeff、Hotmail #fdc347）用深字，暗底用白字，不然看不清
+function railTextColor(bg) {
+  const m = /^#([0-9a-f]{6})$/i.exec(bg || '');
+  if (!m) return '#fff';
+  const r = parseInt(m[1].slice(0, 2), 16), g = parseInt(m[1].slice(2, 4), 16), b = parseInt(m[1].slice(4, 6), 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? '#1a1a1a' : '#fff';
 }
 function railInitial(acc) {
   const local = (acc.email || acc.label || '?').split('@')[0];
@@ -33,7 +55,11 @@ function buildRail(accounts) {
   for (const acc of accounts) {
     const ic = document.createElement('div');
     ic.className = 'rail-icon' + (selectedAccId === acc.id ? ' selected' : '');
-    ic.style.background = railColorFor(acc);
+    // 注意：别用 ic.style.background 回读再算字色——style.background 读回来是 rgb(...) 格式，
+    // railTextColor 只认 #rrggbb，会误判成白字。先存到变量里再传。
+    const railBg = railColorFor(acc);
+    ic.style.background = railBg;
+    ic.style.color = railTextColor(railBg);
     ic.textContent = railInitial(acc);
     ic.title = acc.label || acc.email || acc.provider;
     ic.dataset.accId = acc.id;
@@ -388,7 +414,12 @@ async function openReader(msgDiv, acc, m) {
     return;
   }
   bodyEl.classList.remove('loading');
-  bodyEl.textContent = res.text || '(没有正文)';
+  // v1.15.53：正文放进单独的 .msg-body-text，翻译时只换这块文字，不动下面的工具行
+  bodyEl.textContent = '';
+  const bodyText = document.createElement('div');
+  bodyText.className = 'msg-body-text';
+  bodyText.textContent = res.text || '(没有正文)';
+  bodyEl.append(bodyText);
   // v1.15.11：正文里提到的验证码（比标题+摘要准）——有就更新这行的徽标，没有就补一个
   if (res.code) {
     const oldBadge = msgDiv.querySelector('.code');
@@ -401,10 +432,14 @@ async function openReader(msgDiv, acc, m) {
   const web = document.createElement('a');
   web.textContent = acc.provider === 'gmail' ? '在 Gmail 中打开 ↗' : '在 Outlook 中打开 ↗';
   web.onclick = (e) => { e.stopPropagation(); chrome.runtime.sendMessage({ type: 'mmn-open-message', accountId: acc.id, messageId: m.id }).catch(() => {}); };
+  // v1.15.53：翻译（Google 免费接口，译成简体中文；再点切回原文，译文缓存不再重复请求）
+  const tr = document.createElement('a');
+  tr.textContent = '翻译';
+  tr.onclick = (e) => { e.stopPropagation(); toggleTranslate(bodyEl, bodyText, tr, res.text || ''); };
   const collapse = document.createElement('a');
   collapse.textContent = '收起 ∧';
   collapse.onclick = (e) => { e.stopPropagation(); closeReader(msgDiv, acc); };
-  tools.append(web, collapse);
+  tools.append(web, tr, collapse);
   bodyEl.append(tools);
   // 读完自动标已读（安静模式：后台不重查，弹窗自己减计数）
   const actionType = acc.provider === 'gmail' ? 'mmn-gmail-action' : 'mmn-outlook-action';
@@ -416,6 +451,41 @@ async function openReader(msgDiv, acc, m) {
   } else if (r2) {
     setActionStatus(acc.id, actionErrorText(r2), true);
   }
+}
+// v1.15.53：正文翻译开关。已是中文（CJK 占 60% 以上）就不发请求；译文存 bodyEl._transText，切换不再重复请求。
+async function toggleTranslate(bodyEl, bodyText, link, origText) {
+  if (bodyEl._showingTrans) {
+    bodyText.textContent = origText;
+    bodyEl._showingTrans = false;
+    link.textContent = '翻译';
+    return;
+  }
+  if (bodyEl._transText) {
+    bodyText.textContent = bodyEl._transText;
+    bodyEl._showingTrans = true;
+    link.textContent = '原文';
+    return;
+  }
+  if (!origText || !origText.trim()) return;
+  const cjk = (origText.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const nonWs = origText.replace(/\s/g, '').length;
+  if (nonWs && cjk / nonWs > 0.6) {
+    link.textContent = '已是中文';
+    setTimeout(() => { if (!bodyEl._showingTrans) link.textContent = '翻译'; }, 1500);
+    return;
+  }
+  link.textContent = '翻译中…';
+  const res = await chrome.runtime.sendMessage({ type: 'mmn-translate', text: origText }).catch(() => null);
+  if (!bodyEl.isConnected) return;
+  if (!res || res.ok !== true) {
+    link.textContent = '翻译失败';
+    setTimeout(() => { if (!bodyEl._showingTrans) link.textContent = '翻译'; }, 2000);
+    return;
+  }
+  bodyEl._transText = res.text;
+  bodyText.textContent = res.text;
+  bodyEl._showingTrans = true;
+  link.textContent = '原文';
 }
 // 安静标已读成功后：账号徽标 -1，总数 -1（下次定时检查再跟服务器对齐）
 // v1.15.7：邮件行不再嵌在账号卡里，按 data-acc-id 找账号条上的徽标
