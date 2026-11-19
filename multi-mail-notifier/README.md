@@ -1,7 +1,27 @@
-# Multi Mail Notifier v1.15.12
+# Multi Mail Notifier v1.15.45
 Multi Mail Notifier 是一款适用于 Chrome、Edge 和 Firefox 的免费浏览器扩展（Gmail 通知工具）：它检查浏览器里登录的每个 Gmail 账号和你添加的 Outlook.com 账号、Proton 账号，只提醒需要你处理的邮件，并让登录验证码一键可用。
 
-## v1.15.12：Outlook 点哪个号就进哪个号的邮箱（真隔离）
+## v1.15.45：更新检查改读 version.json（仓库是 browser-plug-in）
+- 仓库是 `djkyc/browser-plug-in`（一个仓库放多个插件，扩展在 `multi-mail-notifier/` 文件夹里），Release 是整个仓库共用的，查 Releases API 会拿到别的插件的版本，所以更新检查改成读本插件文件夹里的 `version.json`（`https://raw.githubusercontent.com/djkyc/browser-plug-in/main/multi-mail-notifier/version.json`），里面写最新版号和下载链接。manifest 的 host 权限也从 `api.github.com` 换成 `raw.githubusercontent.com`。
+- 发布新版时：manifest 升版号 → 打包新 zip → 把 `version.json` 里的 `version`/`url`/`download` 改成新的 → 推到 GitHub（zip 挂到 Release 上，tag 写 `multi-mail-notifier-v1.15.45` 这种）。
+
+## v1.15.44：自动检查更新（GitHub）
+- **设置页“提醒”区加了“自动检查更新”开关**：开着时，扩展每天去 GitHub 查一次有没有新版本（每 12 小时一次 + 启动时超过 6 小时没查过就查一次）；关掉就不查了。开关在设置页，改完点“保存设置”生效。
+- **“更新”区**：显示当前版本和最新版本，点“立即检查更新”马上查一次；查到新版会弹桌面通知，点通知打开 GitHub 发布页下载新 zip。
+- **注意**：扩展不能自己给自己换代码（Chrome 不允许），所以查到新版后要手动下载新 zip、解压覆盖安装后点扩展卡片上的刷新。想完全静默自动更新，只能上架 Chrome 应用商店（Chrome 每隔几小时自动帮用户升版）。
+- 更新检查走本插件文件夹里的 `version.json`（raw.githubusercontent.com），拿里面的版号跟当前版比。仓库名和地址在 background.js 顶部的 `UPDATE_JSON_URL`，换仓库改那一行就行。
+
+## v1.15.43：主图标换成红圈版
+- 主图标（icon16/48/128.png）换成白底圆 + 细红圈 #e5392c + 里面红信封 #e5392c + 白 V 加粗，信封带投影和翻盖阴影。
+
+## v1.15.42：Hotmail 徽章换成橙信封
+- Hotmail 徽章换成官方 Hotmail logo (2011-2013).png 里抠出来的橙色信封（不要右边的字），存成 icons/logo-hotmail.png。
+
+## v1.15.41：修 WebDAV 恢复找不到备份 + 每行加删除
+- WebDAV 列备份时 PROPFIND 的 href 解析改成按 localName 取（大小写前缀都认），InfiniCLOUD/TeraCLOUD 返回大写 `D:` 前缀也能列出来；0 个备份时状态栏会写服务器共返回了几个条目，方便分清是空目录还是名字对不上；每行备份加了“删除”按钮。
+
+## v1.15.40：Hotmail/Live 徽章拆分
+- Hotmail 用 MSN Hotmail logo.svg 的红椭圆+白 msn，Live 从 Hotmail 拆出来用 Outlook.com 图标的蓝 O 方块。
 - **根因**：Outlook 网页版同一个浏览器会话里一次只能有一个活跃账号，/mail/N/ 是浏览器里登录的顺序槽位，不是扩展自己的序号。之前两个个人号都写死开 /mail/0/，0 号槽位是哪个邮箱由浏览器定，点 adjlevis@outlook.com 却进了 hotmail就是这么来的。拿扩展的 index 拼 /mail/N/ 也一样会串（扩展里 adjlevis@outlook.com 是 index 0，可浏览器里 0 号槽位是 hotmail）——这正是 v1.15.8 拆掉的做法，不要再用。
 - **改法**：从真实标签页上学槽位。内容脚本在 Outlook 标签页加载后主动上报（当前登录的邮箱 + 地址栏里的 /mail/N/ 槽位），后台记在 outlookSlots 里；扫已开标签页时也顺便记。以后“打开收件箱”按学到的槽位开；还没学到的，逐个槽位试（复用同一个标签页），试出来就记下来，以后直接开对的槽位。新开标签页后会把 lastTabId 记下来，下次直接切过去。工作/学校号走 office.com，没有槽位。
 
@@ -112,6 +132,7 @@ Multi Mail Notifier 是一款适用于 Chrome、Edge 和 Firefox 的免费浏览
 - 自定义邮箱不用手动留标签页：先试 SID 后台查，查不到就由扩展自己开一个固定、不激活的后台标签页，关了自动重开。
 
 ## 安装
-Chrome → chrome://extensions/ → 开发者模式 → 加载已解压的扩展程序 → 选本文件夹，或解压 multi-mail-notifier-v1.13.0.zip 后加载。
+Chrome → chrome://extensions/ → 开发者模式 → 加载已解压的扩展程序 → 选本文件夹，或去 GitHub Releases 下 zip、解压后加载。
 **注意：必须解压覆盖原来那个文件夹再点刷新，不要移除重装、不要换文件夹**，否则扩展 ID 变了、账号和 token 全丢。
 装好后：设置页 Outlook 区域每个号点“登录”，在微软登录页选号登入即可。
+新版本发布到 GitHub Releases 后，扩展（开着自动检查更新时）会弹通知提醒，点通知去下载新 zip，同样解压覆盖 + 刷新。

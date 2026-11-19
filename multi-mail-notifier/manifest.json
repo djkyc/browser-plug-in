@@ -1,0 +1,76 @@
+{
+  "action": {
+    "default_icon": {
+      "128": "icons/icon128.png",
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "Multi Mail Notifier"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "content-proton.js"
+      ],
+      "matches": [
+        "https://mail.proton.me/*"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "js": [
+        "content-outlook.js"
+      ],
+      "matches": [
+        "https://outlook.live.com/*",
+        "https://outlook.office.com/*",
+        "https://outlook.cloud.microsoft/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "description": "Multi Mail Notifier 是一款适用于 Chrome、Edge 和 Firefox 的免费浏览器扩展（Gmail 通知工具）：它检查浏览器里登录的每个 Gmail 账号和你添加的 Outlook.com 账号、Proton 账号，只提醒需要你处理的邮件，并让登录验证码一键可用。",
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://gmail.googleapis.com/*",
+    "https://oauth2.googleapis.com/*",
+    "https://accounts.google.com/*",
+    "https://outlook.live.com/*",
+    "https://outlook.office.com/*",
+    "https://outlook.office365.com/*",
+    "https://outlook.cloud.microsoft/*",
+    "https://mail.proton.me/*",
+    "https://*.live.com/*",
+    "https://login.microsoftonline.com/*",
+    "https://*.microsoftonline.com/*",
+    "https://graph.microsoft.com/*",
+    "https://dav.jianguoyun.com/*",
+    "https://dav.infini-cloud.net/*",
+    "https://higa.teracloud.jp/*",
+    "https://raw.githubusercontent.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "icons": {
+    "128": "icons/icon128.png",
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png"
+  },
+  "manifest_version": 3,
+  "name": "Multi Mail Notifier — Gmail / Outlook / Proton 多账号",
+  "options_page": "options.html",
+  "permissions": [
+    "alarms",
+    "notifications",
+    "storage",
+    "tabs",
+    "webRequest",
+    "identity"
+  ],
+  "version": "1.15.45"
+}

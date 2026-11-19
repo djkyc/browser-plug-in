@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Multi Mail Notifier 设置</title>
+<style>
+/* v1.15.22：苹果风（圆角、柔和阴影、弹性动画、鼠标跟随光斑）+ 三档主题（自动/暗黑/白色） */
+:root{
+  --spring:cubic-bezier(0.34,1.56,0.64,1);
+  --ease:cubic-bezier(0.32,0.72,0,1);
+  --bg:#f5f5f7;
+  --card:#ffffff;
+  --card-2:#f9fafb;
+  --text:#1d1d1f;
+  --text-2:#6e6e73;
+  --text-3:#86868b;
+  --border:#e8e8ed;
+  --border-2:#d2d2d7;
+  --accent:#d92d20;
+  --accent-2:#f04438;
+  --accent-soft:#fef3f2;
+  --accent-soft-border:#fecdca;
+  --ok-bg:#dcfae6;
+  --ok-text:#067647;
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 4px 12px rgba(0,0,0,.05);
+  --shadow-hover:0 2px 6px rgba(0,0,0,.08),0 8px 20px rgba(0,0,0,.08);
+  --spot:rgba(217,45,32,.05);
+  --input-bg:#ffffff;
+  --code-bg:#f2f4f7;
+  --code-text:#b42318;
+  --diag-bg:#101828;
+  --diag-text:#d0d5dd;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1c1c1e;
+    --card:#2c2c2e;
+    --card-2:#3a3a3c;
+    --text:#f5f5f7;
+    --text-2:#aeaeb2;
+    --text-3:#86868b;
+    --border:#3a3a3c;
+    --border-2:#48484a;
+    --accent:#ff6961;
+    --accent-2:#f04438;
+    --accent-soft:#3a2320;
+    --accent-soft-border:#5c2b26;
+    --ok-bg:#123524;
+    --ok-text:#6ce9a6;
+    --shadow:0 1px 3px rgba(0,0,0,.3),0 4px 12px rgba(0,0,0,.25);
+    --shadow-hover:0 2px 6px rgba(0,0,0,.35),0 8px 20px rgba(0,0,0,.3);
+    --spot:rgba(255,105,97,.08);
+    --input-bg:#2c2c2e;
+    --code-bg:#3a3a3c;
+    --code-text:#ff8a80;
+    --diag-bg:#000000;
+    --diag-text:#d0d5dd;
+  }
+}
+[data-theme="dark"]{
+  --bg:#1c1c1e;--card:#2c2c2e;--card-2:#3a3a3c;--text:#f5f5f7;--text-2:#aeaeb2;--text-3:#86868b;
+  --border:#3a3a3c;--border-2:#48484a;--accent:#ff6961;--accent-2:#f04438;--accent-soft:#3a2320;
+  --accent-soft-border:#5c2b26;--ok-bg:#123524;--ok-text:#6ce9a6;
+  --shadow:0 1px 3px rgba(0,0,0,.3),0 4px 12px rgba(0,0,0,.25);
+  --shadow-hover:0 2px 6px rgba(0,0,0,.35),0 8px 20px rgba(0,0,0,.3);
+  --spot:rgba(255,105,97,.08);--input-bg:#2c2c2e;--code-bg:#3a3a3c;--code-text:#ff8a80;
+  --diag-bg:#000000;--diag-text:#d0d5dd;
+}
+[data-theme="light"]{
+  --bg:#f5f5f7;--card:#ffffff;--card-2:#f9fafb;--text:#1d1d1f;--text-2:#6e6e73;--text-3:#86868b;
+  --border:#e8e8ed;--border-2:#d2d2d7;--accent:#d92d20;--accent-2:#f04438;--accent-soft:#fef3f2;
+  --accent-soft-border:#fecdca;--ok-bg:#dcfae6;--ok-text:#067647;
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 4px 12px rgba(0,0,0,.05);
+  --shadow-hover:0 2px 6px rgba(0,0,0,.08),0 8px 20px rgba(0,0,0,.08);
+  --spot:rgba(217,45,32,.05);--input-bg:#ffffff;--code-bg:#f2f4f7;--code-text:#b42318;
+  --diag-bg:#101828;--diag-text:#d0d5dd;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:28px 16px 48px;font:14px/1.65 system-ui,-apple-system,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg);transition:background .3s var(--ease),color .3s var(--ease)}
+.wrap{max-width:720px;margin:0 auto}
+.brand{display:flex;align-items:center;gap:12px;margin:4px 2px 20px}
+.brand img{width:44px;height:44px;border-radius:12px;box-shadow:0 6px 16px rgba(217,45,32,.35)}
+.brand h1{font-size:22px;margin:0;background:linear-gradient(135deg,#f04438,#b42318);-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:.2px}
+.brand p{margin:0;font-size:12.5px;color:var(--text-2)}
+/* 卡片：圆角 20、柔和阴影；鼠标跟随光斑（--mx/--my 由 JS 写） */
+.card{position:relative;overflow:hidden;background:var(--card);border-radius:20px;padding:20px 22px;margin-bottom:16px;box-shadow:var(--shadow);transition:transform .35s var(--spring),box-shadow .3s var(--ease),background .3s var(--ease)}
+.card::before{content:"";position:absolute;inset:0;background:radial-gradient(280px circle at var(--mx,50%) var(--my,0%),var(--spot),transparent 70%);opacity:0;pointer-events:none;transition:opacity .3s var(--ease)}
+.card:hover::before{opacity:1}
+.card:hover{box-shadow:var(--shadow-hover)}
+.card h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:8px;color:var(--text)}
+.card h2::before{content:"";width:5px;height:18px;border-radius:3px;background:linear-gradient(180deg,#f04438,#d92d20)}
+.note{background:var(--accent-soft);border:1px solid var(--accent-soft-border);border-radius:12px;padding:13px 15px;color:var(--text-2)}
+.note b{color:var(--accent)}
+.howto{margin-top:6px}
+.howto>div{display:flex;gap:10px;margin:9px 0}
+.howto b{flex:none;width:58px}
+.howto span{line-height:1.55}
+/* v1.15.21：账号行拖动排序 */
+#accTable tr.dragging{opacity:.45}
+#accTable tr.drag-over td{border-top:2px solid var(--accent-2)}
+#accTable td:first-child{width:22px;text-align:center;color:var(--text-3)}
+/* v1.15.23：操作列三个按钮（登录/打开/删除）排成一排不换行，按钮收紧 */
+#accTable td:last-child{white-space:nowrap}
+#accTable td:last-child button{padding:5px 10px;font-size:12px}
+code{background:var(--code-bg);border-radius:5px;padding:1px 6px;font-size:12.5px;color:var(--code-text)}
+label{display:block;margin:12px 0;color:var(--text)}
+input[type=text],input[type=number],input[type=time],input[type=password],select{padding:8px 11px;border:1px solid var(--border-2);border-radius:9px;font-size:13.5px;outline:none;background:var(--input-bg);color:var(--text);transition:border-color .25s var(--ease),box-shadow .25s var(--ease)}
+input[type=text]:focus,input[type=number]:focus,input[type=time]:focus,input[type=password]:focus,select:focus{border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(240,68,56,.14)}
+input[type=text]{width:210px}
+input[type=number]{width:74px}
+input[type=color]{width:44px;height:30px;padding:2px;border:1px solid var(--border-2);border-radius:8px;background:var(--input-bg);cursor:pointer}
+input[type=checkbox]{width:16px;height:16px;accent-color:#d92d20;vertical-align:-3px;margin-right:6px}
+/* 按钮：弹性按压（scale .96 + spring 回弹） */
+button{cursor:pointer;border:1px solid var(--border-2);background:var(--card);border-radius:999px;padding:7px 15px;font-size:13px;font-weight:600;color:var(--text);transition:transform .35s var(--spring),background .25s var(--ease),border-color .25s var(--ease),filter .25s var(--ease)}
+button:hover{background:var(--card-2);border-color:var(--text-3)}
+button:active{transform:scale(.95)}
+button.primary{background:linear-gradient(135deg,#f04438,#d92d20);border:none;color:#fff;box-shadow:0 3px 10px rgba(217,45,32,.3)}
+button.primary:hover{filter:brightness(1.07);background:linear-gradient(135deg,#f04438,#d92d20)}
+button.danger{color:var(--accent);border-color:var(--accent-soft-border);background:var(--card)}
+button.danger:hover{background:var(--accent-soft)}
+button:disabled{opacity:.5;cursor:default}
+table{width:100%;border-collapse:collapse;margin-top:6px}
+td,th{border-bottom:1px solid var(--border);padding:10px 6px;text-align:left;vertical-align:middle}
+th{font-size:12px;color:var(--text-3);font-weight:700;letter-spacing:.4px}
+#accTable input[type=text]{width:100%;min-width:140px}
+#outlookLoginList>div,#gmailLoginList>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--card-2);border:1px solid var(--border);border-radius:12px;padding:11px 14px;margin-top:9px}
+#outlookLoginList>div span:first-child,#gmailLoginList>div span:first-child{font-weight:700}
+.pill{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 9px}
+.pill.on{background:var(--ok-bg);color:var(--ok-text)}
+.pill.off{background:var(--badge-zero-bg,var(--border));color:var(--text-2)}
+#diagLog{background:var(--diag-bg);color:var(--diag-text);border-radius:14px;padding:14px 16px;white-space:pre-wrap;max-height:320px;overflow:auto;font:12px/1.7 ui-monospace,"SF Mono",Consolas,monospace}
+#saved,#diagSaved{color:var(--ok-text);font-weight:600;margin-left:8px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>*{margin:0}
+.cid-row{display:flex;align-items:center;gap:8px;margin:12px 0}
+.cid-row>*{margin:0}
+.cid-label{display:inline-block;width:170px;flex:none}
+.cid-row select,.cid-row input[type=text],.cid-row input[type=password]{width:340px;flex:none}
+.muted{font-size:12.5px;color:var(--text-2)}
+a{color:var(--accent);text-decoration:none;font-weight:600}
+/* v1.15.22：主题三档切换（分段选择器，苹果设置风） */
+.theme-seg{display:inline-flex;background:var(--card-2);border:1px solid var(--border);border-radius:999px;padding:3px;gap:2px}
+.theme-seg button{border:none;background:transparent;padding:5px 14px;border-radius:999px;font-size:12.5px;color:var(--text-2);box-shadow:none}
+.theme-seg button:hover{background:transparent;color:var(--text)}
+.theme-seg button.on{background:var(--card);color:var(--text);box-shadow:var(--shadow)}
+.theme-seg button:active{transform:scale(.96)}
+/* v1.15.36：邮箱输入的域名候选下拉框（边输边出，点一下补全） */
+.email-suggest{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:20;background:var(--card);border:1px solid var(--border-2);border-radius:10px;box-shadow:var(--shadow-hover);overflow:hidden;max-height:220px;overflow-y:auto}
+.email-suggest button{display:block;width:100%;text-align:left;border:none;background:transparent;padding:8px 12px;font-size:13.5px;color:var(--text);box-shadow:none;border-radius:0;cursor:pointer}
+.email-suggest button:hover,.email-suggest button.on{background:var(--accent-soft);color:var(--text)}
+.email-suggest button b{color:var(--accent);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="brand">
+  <img src="icons/icon128.png" alt="">
+  <div><h1>Multi Mail Notifier</h1><p>Gmail / Outlook / Proton 多账号 · 设置</p></div>
+</div>
+
+<div class="card">
+<h2>怎么加账号</h2>
+<div class="note">
+<b>不用输密码：</b>
+<div class="howto">
+<div><b>Gmail</b><span>不用建项目、不用填密钥：Client ID 是内置的，给每个号点“登录”，在 Google 登录页选号就行。token 约 1 小时，到期自动静默续。自动发现扫 u/0～u/4（2-3 个号就是 u/0、u/1、u/2），找到后也要各登一次。</span></div>
+<div><b>Outlook</b><span>默认用自己的 Azure 应用（下面那个就是，改不了也不用改），每个号点“登录”即可，互不干扰。能回邮件、标已读、归档、删除、写邮件；Azure 应用要加 Mail.ReadWrite、Mail.Send 权限，旧 token 只有读权限，四个号都要重登一次。</span></div>
+<div><b>Proton</b><span>先在标签页登好 <a href="https://mail.proton.me" target="_blank">mail.proton.me</a>，等加载完，扩展抄下会话头再查未读；过期重开一次。用的还是 Email Notifier 同款内部接口，不是官方登录。</span></div>
+</div>
+</div>
+</div>
+
+<div class="card">
+<h2>账号</h2>
+<table id="accTable"><thead><tr><th></th><th>服务商</th><th>标签 / 邮箱</th><th>序号</th><th>未读</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>
+<p class="row" style="margin-top:14px">
+  <select id="newProvider"><option value="gmail">Gmail</option><option value="outlook">Outlook</option><option value="proton">Proton</option></select>
+  <span id="newLabelWrap" style="position:relative;flex:1;min-width:180px;display:flex">
+    <input id="newLabel" type="text" placeholder="标签，如 工作 Gmail" style="flex:1;min-width:0" autocomplete="off">
+    <div id="emailSuggest" class="email-suggest" hidden></div>
+  </span>
+  <button id="addBtn" class="primary">添加账号</button>
+</p>
+<p class="row" style="margin-top:8px">
+  <button id="discoverBtn">自动发现 Gmail 账号</button>
+  <button id="discoverOutlookBtn">从标签页发现 Outlook 账号</button>
+  <button id="discoverTabsBtn">从标签页发现 Proton 账号</button>
+</p>
+</div>
+
+<div class="card">
+<h2>Gmail 登录（Gmail API OAuth）</h2>
+<p class="muted">本扩展的 Google 登录回调地址：<br><code id="googleRedirectUri">…</code> <button id="copyGoogleRedirectUriBtn">复制</button></p>
+<p class="cid-row"><span class="cid-label">Google Client ID：</span>
+<select id="googleClientIdChoice">
+<option value="own">自己的 Google 应用 MultiMailNotifier（默认）</option>
+<option value="custom">自定义</option>
+</select>
+</p>
+<p class="cid-row"><span class="cid-label">Client ID 值：</span><input id="googleClientId" type="text" placeholder="选“自定义”时在这里填 client ID"></p>
+<p class="row"><button id="saveGoogleClientIdBtn" class="primary">保存 Google 凭据</button> <span id="googleClientIdSaved"></span></p>
+<div id="gmailLoginList">正在加载…</div>
+<p class="muted">点“登录”会打开 Google 登录页（强制选号）。登录成功后自动填邮箱、自动查未读。token 有效期约 1 小时，到期自动静默续（浏览器里还登着 Google 就不用再点登录）。token 只存本地，设置页永不显示 token 值。注意：Google OAuth 同意屏幕要是“测试”状态，得把自己的 Gmail 加为测试用户，否则登不进去。</p>
+</div>
+
+<div class="card">
+<h2>Outlook 登录（Microsoft Graph OAuth）</h2>
+<p class="muted">本扩展的登录回调地址：<br><code id="redirectUri">…</code> <button id="copyRedirectUriBtn">复制</button></p>
+<p class="cid-row"><span class="cid-label">Microsoft Client ID：</span>
+<select id="msClientIdChoice">
+<option value="own">自己的 Azure 应用 MultiMailNotifier（默认）</option>
+<option value="custom">自定义</option>
+</select>
+</p>
+<p class="cid-row"><span class="cid-label">Client ID 值：</span><input id="msClientId" type="text" placeholder="选“自定义”时在这里填 client ID"></p>
+<p class="row"><button id="saveMsClientIdBtn" class="primary">保存 Client ID</button> <span id="msClientIdSaved"></span></p>
+<div id="outlookLoginList">正在加载…</div>
+<p class="muted">点“登录”会打开微软登录页（强制选号，不会静默登进最后一个号）。登录成功后自动填邮箱、自动查未读。token 到期自动刷新，刷新失败才需要重新登录。token 只存本地，设置页永不显示 token 值。</p>
+</div>
+
+<div class="card">
+<h2>提醒</h2>
+<label>检查间隔（分钟，Gmail）：<input id="interval" type="number" min="1" max="60" value="1"></label>
+<label><input id="desktopNotif" type="checkbox"> 新邮件桌面通知</label>
+<label><input id="autoUpdateCheck" type="checkbox"> 自动检查更新（每天去 GitHub 查一次新版本，有新版就弹通知；关掉就不查了）</label>
+<label><input id="sound" type="checkbox"> 新邮件提示音（v1 跟随系统通知音，开关已保留）</label>
+<label><input id="onlyImportant" type="checkbox"> 只提醒含验证码的邮件（安静模式，推广邮件不弹）</label>
+<label><input id="quietHours" type="checkbox"> 免打扰时段（这段时间内不弹桌面通知，只记未读数） <input id="quietStart" type="time" value="23:00"> 到 <input id="quietEnd" type="time" value="07:00"></label>
+<label>徽标颜色：<input id="badgeColor" type="color" value="#d93025"></label>
+<label>外观（护眼）：<span class="theme-seg" id="themeSeg"><button type="button" data-theme="auto">自动</button><button type="button" data-theme="dark">暗黑</button><button type="button" data-theme="light">白色</button></span> <span class="muted">自动跟系统走</span></label>
+<p><button id="saveBtn" class="primary">保存设置</button> <span id="saved"></span></p>
+</div>
+
+<div class="card">
+<h2>更新</h2>
+<p class="muted">当前版本：<code id="curVersion">…</code>　<span id="updateStatus">还没检查过。</span></p>
+<p class="row"><button id="updateCheckNowBtn" class="primary">立即检查更新</button> <span id="updateChecked"></span></p>
+<p class="muted">新版本在 GitHub 发布（Releases）。扩展不能自己给自己换代码（Chrome 不允许），查到新版后点通知里的链接去下载新 zip，解压覆盖安装后点扩展卡片上的刷新。想完全静默自动更新，只能上架 Chrome 应用商店。</p>
+</div>
+
+<div class="card">
+<h2>诊断（<span id="extVersion">…</span>，装好后把这里的日志贴给我，我直接看问题在哪）</h2>
+<p class="note">每次检查都记一行：凭证有没有抓到、后台查返回什么状态码、解析到未读数没有。<b>日志里不含 SID 和请求头的值</b>，只含时间和结果，放心贴。</p>
+<p class="row"><button id="diagCheckBtn" class="primary">立即检查一次</button> <button id="diagRefreshBtn">刷新日志</button> <button id="diagCopyBtn">复制诊断日志</button> <button id="diagClearBtn">清空日志</button> <span id="diagSaved"></span></p>
+<pre id="diagLog">还没有日志。点“立即检查一次”，等 10 秒再点“刷新日志”。</pre>
+</div>
+
+<div class="card">
+<h2>登录凭证（只存本地，不显示值）</h2>
+<p id="captured">加载中…</p>
+</div>
+
+<div class="card">
+<h2>数据</h2>
+<p class="muted">所有账号和设置只存在这台浏览器的 <code>chrome.storage.local</code> 里，不发到任何服务器。卸载扩展即删除。</p>
+<p class="row"><button id="dedupBtn">清理重复账号</button> <button id="resetBtn" class="danger">清空所有账号</button></p>
+</div>
+
+<div class="card">
+<h2>WebDAV 备份</h2>
+<p class="muted">把账号和设置备份到你的 WebDAV 网盘，换电脑时再从这里恢复。只备份账号和设置，不备份登录 token 和 WebDAV 密码，恢复后去账号表里重新点“登录”即可。坚果云的密码要用“应用密码”（坚果云网页版 → 账户信息 → 安全选项 → 添加应用密码），不是登录密码。</p>
+<p class="cid-row"><span class="cid-label">服务器：</span><select id="davPreset"><option value="jianguoyun">坚果云</option><option value="infinicloud">InfiniCLOUD</option><option value="custom">自定义</option></select></p>
+<p class="cid-row"><span class="cid-label">WebDAV 地址：</span><input id="davUrl" type="text" placeholder="https://dav.jianguoyun.com/dav/"></p>
+<p class="cid-row"><span class="cid-label">账号：</span><input id="davUser" type="text" placeholder="WebDAV 账号（坚果云填邮箱）" autocomplete="off"></p>
+<p class="cid-row"><span class="cid-label">密码：</span><input id="davPass" type="password" placeholder="WebDAV 密码 / 应用密码" autocomplete="off"></p>
+<p class="row"><button id="davUploadBtn" class="primary">备份到 WebDAV</button> <button id="davTestBtn">测试连接</button> <button id="davDownloadBtn">从 WebDAV 恢复</button> <span id="davStatus"></span></p>
+<div id="davBackupList"></div>
+</div>
+</div>
+
+<script src="provider-icons.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

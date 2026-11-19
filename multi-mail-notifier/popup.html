@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div id="shell">
+  <!-- v1.15.26：左侧账号图标栏（像图二那种小圆标），点哪个看哪个号的邮件 -->
+  <nav id="rail"></nav>
+  <div id="main">
+    <header>
+      <h1><img src="icons/icon48.png" style="width:24px;height:24px;vertical-align:-4px"> Multi Mail</h1>
+      <div class="actions">
+        <button id="refresh" title="立即检查">↻ 检查</button>
+        <button id="openOptions" title="设置">⚙️</button>
+      </div>
+    </header>
+    <div id="total"></div>
+    <input id="search" type="text" placeholder="搜发件人 / 标题…">
+    <div id="list"></div>
+    <footer id="foot"></footer>
+  </div>
+</div>
+<script src="provider-icons.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
