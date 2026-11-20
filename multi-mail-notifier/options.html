@@ -223,6 +223,7 @@ a{color:var(--accent);text-decoration:none;font-weight:600}
 <label>检查间隔（分钟）：<input id="interval" type="number" min="0.5" max="60" step="0.5" value="0.5"></label>
 <label><input id="desktopNotif" type="checkbox"> 新邮件桌面通知</label>
 <label><input id="autoUpdateCheck" type="checkbox"> 自动检查更新（每天去 GitHub 查一次新版本，有新版就弹通知；关掉就不查了）</label>
+<label><input id="includeJunk" type="checkbox"> 同时检查垃圾邮件（Outlook 垃圾邮件文件夹、Gmail 垃圾邮件里的未读也会显示，带“垃圾”标记；关掉就只查收件箱）</label>
 <label><input id="sound" type="checkbox"> 新邮件提示音（v1 跟随系统通知音，开关已保留）</label>
 <label><input id="onlyImportant" type="checkbox"> 只提醒含验证码的邮件（安静模式，推广邮件不弹）</label>
 <label><input id="quietHours" type="checkbox"> 免打扰时段（这段时间内不弹桌面通知，只记未读数） <input id="quietStart" type="time" value="23:00"> 到 <input id="quietEnd" type="time" value="07:00"></label>

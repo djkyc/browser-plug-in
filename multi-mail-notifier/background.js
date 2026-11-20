@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = {
   quietEnd: '07:00',       // 免打扰结束
   badgeColor: '#d93025',
   autoUpdateCheck: true,   // v1.15.44：自动检查更新（去 GitHub 查新版本）
+  includeJunk: true,       // v1.15.57：同时检查垃圾邮件（Outlook 垃圾邮件文件夹、Gmail 垃圾邮件；默认开着，直接能收到垃圾箱里的邮件）
 };
 
 // v1.15.45：自动检查更新——读仓库里 multi-mail-notifier/version.json。
@@ -475,7 +476,7 @@ async function checkProtonAccount(acc) {
     }
     // v1.15.0：把未读会话列出来（发件人/标题/链接），弹窗里能点、能标已读/归档/删除；
     // 正文是端到端加密的，后台解不开，点邮件还是打开网页版看。
-    const messages = unreadConvs.map((c) => {
+    let messages = unreadConvs.map((c) => {
       const sender = (c.Senders && c.Senders[0]) || {};
       return {
         id: c.ID,
@@ -486,6 +487,49 @@ async function checkProtonAccount(acc) {
         link: `https://mail.proton.me/u/${idx}/inbox/${c.ID}`,
       };
     });
+    // v1.15.56：includeJunk 开时，连垃圾邮件（LabelID=4）一起查（未读数加上，列表跟在收件箱后面取前 10，带 spam 标记）
+    if ((await getSettings()).includeJunk) {
+      try {
+        let spamPages = 0, spamFetched = 0, spamTotal = Infinity;
+        const spamConvs = [];
+        while (spamPages < 3 && spamConvs.length < 10) {
+          const sres = await fetch(`https://mail.proton.me/api/mail/v4/conversations?LabelID=4&Page=${spamPages}&PageSize=${PAGE}`, {
+            method: 'GET', credentials: 'include', headers,
+          });
+          if (!sres.ok) break;
+          const sobj = await sres.json();
+          const slist = Array.isArray(sobj?.Conversations) ? sobj.Conversations : [];
+          if (typeof sobj?.Total === 'number') spamTotal = sobj.Total;
+          spamFetched += slist.length;
+          for (const c of slist) {
+            const n = c.NumUnread || 0;
+            if (n) {
+              totalUnread += n;
+              unreadConvCount++;
+              if (spamConvs.length < 10) spamConvs.push(c);
+            }
+          }
+          spamPages++;
+          if (slist.length === 0) break;
+          if (spamFetched >= spamTotal) break;
+        }
+        const spamMsgs = spamConvs.map((c) => {
+          const sender = (c.Senders && c.Senders[0]) || {};
+          return {
+            id: c.ID,
+            sender: sender.Name || sender.Address || '',
+            senderEmail: sender.Address || '',
+            subject: c.Subject || '(无标题)',
+            summary: (c.NumMessages || 1) > 1 ? `会话共 ${c.NumMessages} 封 · ${c.NumUnread} 封未读` : '',
+            link: `https://mail.proton.me/u/${idx}/spam/${c.ID}`,
+            folder: 'spam',
+          };
+        });
+        messages = [...messages, ...spamMsgs].slice(0, 10);
+      } catch (e) {
+        await diagLog(`[${acc.label || 'Proton ' + idx}] 垃圾邮件查异常：${String(e?.message || e)}，只用收件箱`);
+      }
+    }
     const capped = pages >= MAX_PAGES && fetched < totalConvs;
     await diagLog(`[${acc.label || 'Proton ' + idx}] 后台查：HTTP 200，未读 ${totalUnread} 封（${unreadConvCount} 个未读会话，翻了 ${pages} 页${capped ? '，会话太多只数了前 ' + fetched + ' 个' : ''}）`);
     return { ...acc, unread: totalUnread, messages, status: 'ok', lastCheck: Date.now() };
@@ -574,7 +618,9 @@ async function notifyIfIncreased(oldAccounts, newAccounts) {
     const prev = oldAccounts.find(a => a.id === next.id);
     const prevUnread = prev ? (prev.unread || 0) : 0;
     if ((next.unread || 0) <= prevUnread) continue;
-    const fresh = (next.messages || []).slice(0, 3);
+    // v1.15.56：垃圾邮件只在弹窗里显示，不弹桌面通知——只报收件箱的新邮件
+    const fresh = (next.messages || []).filter(m => m.folder !== 'junk' && m.folder !== 'spam').slice(0, 3);
+    if (fresh.length === 0) continue;
     // onlyImportant：只报含验证码的
     const toShow = settings.onlyImportant ? fresh.filter(m => m.code) : fresh;
     if (settings.onlyImportant && toShow.length === 0) continue;

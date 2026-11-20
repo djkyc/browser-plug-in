@@ -313,7 +313,7 @@ async function checkGmailAccount(acc) {
       return { ...acc, status: 'error:' + res.status, unread: acc.unread || 0, lastCheck: Date.now() };
     }
     const data = await res.json();
-    const unread = Number.isFinite(data.messagesUnread) ? data.messagesUnread : 0;
+    let unread = Number.isFinite(data.messagesUnread) ? data.messagesUnread : 0;
     // 最近未读邮件列表（带 ID，供弹窗里标已读/归档/删除/回复）
     let messages = acc.messages || [];
     try {
@@ -343,6 +343,49 @@ async function checkGmailAccount(acc) {
       }
     } catch (e) {
       await diagLog(`[${who}] Gmail API 取邮件列表异常：${String((e && e.message) || e)}，沿用旧列表`);
+    }
+    // v1.15.56：includeJunk 开时，连垃圾邮件（SPAM 标签）一起查（未读数加上，列表合并按时间倒序取前 10，带 spam 标记）
+    if ((await getSettings()).includeJunk) {
+      try {
+        const sres = await fetch(G_API_BASE + '/users/me/labels/SPAM', {
+          headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
+        });
+        if (sres.ok) {
+          const sdata = await sres.json();
+          unread += Number.isFinite(sdata.messagesUnread) ? sdata.messagesUnread : 0;
+        }
+      } catch { /* SPAM 标签取不到就不算，不影响收件箱 */ }
+      try {
+        const lres = await fetch(G_API_BASE + '/users/me/messages?q=' + encodeURIComponent('is:unread in:spam') + '&maxResults=10', {
+          headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
+        });
+        if (lres.ok) {
+          const ldata = await lres.json();
+          const ids = (Array.isArray(ldata.messages) ? ldata.messages : []).slice(0, 10).map(m => m.id).filter(Boolean);
+          const details = [];
+          for (const id of ids) {
+            try {
+              const dres = await fetch(G_API_BASE + '/users/me/messages/' + encodeURIComponent(id) + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-ID', {
+                headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
+              });
+              if (dres.ok) details.push(await dres.json());
+            } catch { /* 单封取失败就跳过 */ }
+          }
+          const idx = acc.index ?? 0;
+          const spamMsgs = parseGmailMessages(details).map(m => ({
+            ...m,
+            folder: 'spam',
+            link: m.id ? `https://mail.google.com/mail/u/${idx}/#spam/${m.id}` : '',
+          }));
+          messages = [...messages, ...spamMsgs]
+            .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
+            .slice(0, 10);
+        } else {
+          await diagLog(`[${who}] Gmail API 取垃圾邮件列表：HTTP ${lres.status}，只用收件箱列表`);
+        }
+      } catch (e) {
+        await diagLog(`[${who}] Gmail API 取垃圾邮件列表异常：${String((e && e.message) || e)}，只用收件箱列表`);
+      }
     }
     return { ...acc, unread, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
   } catch (e) {

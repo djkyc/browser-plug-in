@@ -108,6 +108,7 @@ async function load() {
   document.getElementById('interval').value = settings.intervalMinutes ?? 0.5;
   document.getElementById('desktopNotif').checked = settings.desktopNotif !== false;
   document.getElementById('autoUpdateCheck').checked = settings.autoUpdateCheck !== false;
+  document.getElementById('includeJunk').checked = settings.includeJunk !== false;
   refreshUpdateStatus();
   document.getElementById('sound').checked = !!settings.sound;
   document.getElementById('onlyImportant').checked = !!settings.onlyImportant;
@@ -491,6 +492,7 @@ document.getElementById('saveBtn').onclick = async () => {
     intervalMinutes: Math.max(0.5, parseFloat(document.getElementById('interval').value) || 0.5),
     desktopNotif: document.getElementById('desktopNotif').checked,
     autoUpdateCheck: document.getElementById('autoUpdateCheck').checked,
+    includeJunk: document.getElementById('includeJunk').checked,
     sound: document.getElementById('sound').checked,
     onlyImportant: document.getElementById('onlyImportant').checked,
     quietHours: document.getElementById('quietHours').checked,

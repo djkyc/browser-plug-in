@@ -203,6 +203,13 @@ function buildMsgEl(acc, m, showAcc) {
   const sum = document.createElement('div'); sum.className = 'sum'; sum.textContent = m.summary || '';
   msg.append(meta, from, subj, sum);
   if (m.code) msg.append(makeCodeBadge(msg, m.code));
+  // v1.15.56：垃圾邮件（Outlook junk / Gmail、Proton spam）打个“垃圾”标记，一眼分得出
+  if (m.folder === 'junk' || m.folder === 'spam') {
+    const jb = document.createElement('span');
+    jb.className = 'junk-badge';
+    jb.textContent = '垃圾邮件';
+    msg.append(jb);
+  }
   // v1.12.0 Outlook / v1.13.0 Gmail / v1.15.0 Proton：每封邮件的操作按钮
   // Proton 只有标已读/归档/删除，没有回复（回信要私钥加密，扩展里做不了）
   if (acc.status === 'ok' && m.id) {

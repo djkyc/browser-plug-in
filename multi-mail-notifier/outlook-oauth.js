@@ -31,6 +31,9 @@ const MS_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token
 const MS_GRAPH_ME_URL = 'https://graph.microsoft.com/v1.0/me?$select=userPrincipalName,mail,displayName';
 const MS_GRAPH_INBOX_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox?$select=unreadItemCount';
 const MS_GRAPH_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/messages?$top=10&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$filter=isRead eq false&$orderby=receivedDateTime desc';
+// v1.15.56：垃圾邮件文件夹（includeJunk 开关开时一起查）
+const MS_GRAPH_JUNK_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail?$select=unreadItemCount';
+const MS_GRAPH_JUNK_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages?$top=10&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$filter=isRead eq false&$orderby=receivedDateTime desc';
 const MS_OAUTH_SCOPE = 'openid profile email offline_access Mail.ReadWrite Mail.Send';
 // 默认 client ID：用户自己的 Azure 应用 MultiMailNotifier 的 client ID（public client，不含 secret）。
 // Thunderbird 的公开 client ID 也留在设置页里可选（实测可用）。
@@ -350,7 +353,7 @@ async function checkOutlookAccount(acc) {
       return { ...acc, status: 'error:' + res.status, unread: acc.unread || 0, lastCheck: Date.now() };
     }
     const data = await res.json();
-    const unread = Number.isFinite(data.unreadItemCount) ? data.unreadItemCount : 0;
+    let unread = Number.isFinite(data.unreadItemCount) ? data.unreadItemCount : 0;
     // 最近未读邮件列表（带 Graph ID）；取不到就沿用旧列表，不影响未读数
     let messages = acc.messages || [];
     try {
@@ -366,6 +369,34 @@ async function checkOutlookAccount(acc) {
     } catch (e) {
       await diagLog(`[${who}] Graph 取邮件列表异常：${String((e && e.message) || e)}，沿用旧列表`);
     }
+    // v1.15.56：includeJunk 开时，连垃圾邮件文件夹一起查（未读数加上，列表合并按时间倒序取前 10，带 junk 标记）
+    if ((await getSettings()).includeJunk) {
+      try {
+        const jres = await fetch(MS_GRAPH_JUNK_URL, {
+          headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
+        });
+        if (jres.ok) {
+          const jdata = await jres.json();
+          unread += Number.isFinite(jdata.unreadItemCount) ? jdata.unreadItemCount : 0;
+        }
+      } catch { /* 垃圾文件夹取不到就不算，不影响收件箱 */ }
+      try {
+        const jmres = await fetch(MS_GRAPH_JUNK_MESSAGES_URL, {
+          headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
+        });
+        if (jmres.ok) {
+          const jmdata = await jmres.json();
+          const junkMsgs = parseOutlookMessages(jmdata, 'junk');
+          messages = [...messages, ...junkMsgs]
+            .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
+            .slice(0, 10);
+        } else {
+          await diagLog(`[${who}] Graph 取垃圾邮件列表：HTTP ${jmres.status}，只用收件箱列表`);
+        }
+      } catch (e) {
+        await diagLog(`[${who}] Graph 取垃圾邮件列表异常：${String((e && e.message) || e)}，只用收件箱列表`);
+      }
+    }
     return { ...acc, unread, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
   } catch (e) {
     await diagLog(`[${who}] Graph 查未读异常：${String((e && e.message) || e)}`);
@@ -375,7 +406,8 @@ async function checkOutlookAccount(acc) {
 
 // ---------- Outlook 写操作：标已读 / 归档 / 删除 / 回复 / 写邮件 ----------
 // 纯函数：Graph /me/messages 返回值 -> 弹窗用的消息列表（带 Graph ID，供操作）
-function parseOutlookMessages(data) {
+// folder 为 'junk' 时打上标记，弹窗里显示“垃圾”徽标
+function parseOutlookMessages(data, folder) {
   const list = Array.isArray(data && data.value) ? data.value : [];
   return list.slice(0, 10).map(m => {
     const from = m.from && m.from.emailAddress;
@@ -390,6 +422,7 @@ function parseOutlookMessages(data) {
       link: m.webLink || '',
       time: m.receivedDateTime || '',
       code: extractCode(subject + ' ' + summary),
+      folder: folder || '',
     };
   });
 }
