@@ -485,6 +485,10 @@ async function checkProtonAccount(acc) {
         subject: c.Subject || '(无标题)',
         summary: (c.NumMessages || 1) > 1 ? `会话共 ${c.NumMessages} 封 · ${c.NumUnread} 封未读` : '',
         link: `https://mail.proton.me/u/${idx}/inbox/${c.ID}`,
+        // v1.15.60：Proton 也提验证码（之前只有 Gmail/Outlook 有 code，Proton 收件箱和垃圾箱都没有）
+        code: extractCode(c.Subject || ''),
+        // v1.15.60：补 time（之前没有，弹窗按时间排序会把它沉到底，时间也显示不出来）
+        time: c.Time ? new Date(c.Time * 1000).toISOString() : '',
       };
     });
     // v1.15.56：includeJunk 开时，连垃圾邮件（LabelID=4）一起查（未读数加上，列表跟在收件箱后面取前 10，带 spam 标记）
@@ -523,6 +527,10 @@ async function checkProtonAccount(acc) {
             summary: (c.NumMessages || 1) > 1 ? `会话共 ${c.NumMessages} 封 · ${c.NumUnread} 封未读` : '',
             link: `https://mail.proton.me/u/${idx}/spam/${c.ID}`,
             folder: 'spam',
+            // v1.15.60：垃圾箱的 Proton 邮件也提验证码（和收件箱一样）
+            code: extractCode(c.Subject || ''),
+            // v1.15.60：补 time（和收件箱一样，不然排序沉底）
+            time: c.Time ? new Date(c.Time * 1000).toISOString() : '',
           };
         });
         messages = [...messages, ...spamMsgs].slice(0, 10);

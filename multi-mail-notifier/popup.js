@@ -398,8 +398,9 @@ function closeReader(msgDiv, acc) {
   const bodyEl = msgDiv.querySelector('.msg-body');
   if (bodyEl) bodyEl.remove();
   msgDiv._readerOpen = false;
-  // 计数在标已读成功时已经减过，这里只拿掉这行
-  if (msgDiv._readDone) msgDiv.remove();
+  // v1.15.58：收起只折叠正文，邮件留在列表里——只有点“标已读/删除/归档”才拿掉它
+  // v1.15.59：读的时候攒下的刷新，收起后补刷一次
+  if (pendingRefresh) { pendingRefresh = false; load(); }
 }
 async function openReader(msgDiv, acc, m) {
   const bodyEl = document.createElement('div');
@@ -448,16 +449,8 @@ async function openReader(msgDiv, acc, m) {
   collapse.onclick = (e) => { e.stopPropagation(); closeReader(msgDiv, acc); };
   tools.append(web, tr, collapse);
   bodyEl.append(tools);
-  // 读完自动标已读（安静模式：后台不重查，弹窗自己减计数）
-  const actionType = acc.provider === 'gmail' ? 'mmn-gmail-action' : 'mmn-outlook-action';
-  const r2 = await chrome.runtime.sendMessage({ type: actionType, accountId: acc.id, messageId: m.id, action: 'read', quiet: true }).catch(() => null);
-  if (!msgDiv.isConnected) return;
-  if (r2 && r2.ok) {
-    msgDiv._readDone = true;
-    decCounts(msgDiv);
-  } else if (r2) {
-    setActionStatus(acc.id, actionErrorText(r2), true);
-  }
+  // v1.15.58：点开只看正文，不再自动标已读——以前读完就标已读，30 秒一刷新邮件就从未读列表里没了，
+  // 翻译还没看完它先走了。只在用户点“标已读/删除/归档”时才拿掉它。
 }
 // v1.15.53：正文翻译开关。已是中文（CJK 占 60% 以上）就不发请求；译文存 bodyEl._transText，切换不再重复请求。
 async function toggleTranslate(bodyEl, bodyText, link, origText) {
@@ -602,5 +595,14 @@ document.getElementById('refresh').onclick = async () => {
   document.getElementById('refresh').textContent = '↻ 检查';
 };
 document.getElementById('openOptions').onclick = () => chrome.runtime.openOptionsPage();
-chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.accounts) load(); });
+// v1.15.59：正在读正文/翻译时不重画列表——后台 30 秒一检查就写 storage，
+// 一写就触发 load() 整块重画，正在翻译的阅读器会被一起重画掉，翻译也没了。
+// 读的时候先攒着，收起后再补刷一次。
+let pendingRefresh = false;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.accounts) {
+    if (document.querySelector('.msg-body')) { pendingRefresh = true; return; }
+    load();
+  }
+});
 load();
