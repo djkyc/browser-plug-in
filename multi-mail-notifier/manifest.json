@@ -38,6 +38,9 @@
     "https://mail.google.com/*",
     "https://gmail.googleapis.com/*",
     "https://oauth2.googleapis.com/*",
+    "https://*.workers.dev/*",
+    "https://mmn-gmail-oauth.bit.indevs.in/*",
+    "https://mmn-outlook-oauth.bit.indevs.in/*",
     "https://accounts.google.com/*",
     "https://outlook.live.com/*",
     "https://outlook.office.com/*",
@@ -73,7 +76,15 @@
     "storage",
     "tabs",
     "webRequest",
-    "identity"
+    "identity",
+    "identity.email"
   ],
-  "version": "1.15.60"
+  "oauth2": {
+    "client_id": "940110558797-2jrp985nahho6cce4j4sj6lv9pasi0ja.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.send"
+    ]
+  },
+  "version": "1.15.80"
 }

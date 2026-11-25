@@ -18,7 +18,7 @@
  * 所有数据只在 chrome.storage.local，绝不发到任何第三方服务器。
  * token / 请求头的值只存本地，设置页只显示“已登录 / 已抓到 + 时间”，不显示值。
  */
-importScripts('outlook-oauth.js', 'gmail-oauth.js');
+importScripts('outlook-oauth.js', 'gmail-oauth.js', 'bcrypt.min.js', 'proton-srp.js');
 
 const DEFAULT_SETTINGS = {
   intervalMinutes: 0.5,    // 轮询间隔（分钟），0.5 = 30 秒；Chrome 重复闹钟最小 1 分钟，<1 分钟时用一次性闹钟连锁
@@ -396,6 +396,15 @@ async function getCaptured() {
 async function saveCaptured(captured) {
   await chrome.storage.local.set({ captured: { proton: captured.proton || {} } });
 }
+// v1.15.70：Proton SRP token（按邮箱小写存，只存 UID + AccessToken + RefreshToken，密码绝不存）
+// 结构：{ [emailLower]: { uid, accessToken, refreshToken, email, updatedAt } }
+async function getProtonSrpTokens() {
+  const r = await chrome.storage.local.get(['protonSrpTokens']);
+  return r.protonSrpTokens || {};
+}
+async function saveProtonSrpTokens(tokens) {
+  await chrome.storage.local.set({ protonSrpTokens: tokens || {} });
+}
 function headerValue(headers, name) {
   const h = (headers || []).find(x => x.name && x.name.toLowerCase() === name.toLowerCase());
   return h ? h.value : '';
@@ -421,7 +430,7 @@ if (chrome.webRequest && chrome.webRequest.onBeforeSendHeaders) {
       const captured = await getCaptured();
       captured.proton[idx] = {
         uid, accept: headerValue(headers, 'accept') || 'application/vnd.protonmail.v1+json',
-        appversion: headerValue(headers, 'x-pm-appversion') || 'web-mail@5.0.41.4',
+        appversion: headerValue(headers, 'x-pm-appversion') || 'web-mail@5.0.142.3',
         capturedAt: Date.now(),
       };
       await saveCaptured(captured);
@@ -437,26 +446,68 @@ if (chrome.webRequest && chrome.webRequest.onBeforeSendHeaders) {
 // 超过会在日志里说明（这时数字可能比实际少）。
 async function checkProtonAccount(acc) {
   const idx = String(acc.index ?? 0);
-  const captured = await getCaptured();
-  const creds = (captured.proton || {})[idx];
-  if (!creds || !creds.uid) {
-    await diagLog(`[${acc.label || 'Proton ' + idx}] 无凭证：打开一次 mail.proton.me 登录，等加载完会自动抄 x-pm-uid，之后后台调 conversations`);
-    return { ...acc, status: 'need-tab', unread: acc.unread || 0, lastCheck: Date.now() };
+  // v1.15.70：SRP token 优先（Bearer 认证，到期自己续）；没有 SRP 才走抄来的浏览器会话（cookie）
+  const emailKey = String(acc.email || acc.label || '').toLowerCase();
+  const srpTokens = await getProtonSrpTokens();
+  const srp = emailKey ? srpTokens[emailKey] : null;
+  let headers, useCredentials = true, srpCreds = null, refreshed = false;
+  // SRP 查未读的 appversion：优先用浏览器里抄到的当前版（最新），没有才用写死的较新版
+  const capturedVer = await getCaptured();
+  const srpAppVersion = ((capturedVer.proton || {})[idx] || {}).appversion || 'web-mail@5.0.142.3';
+  if (srp && srp.accessToken && srp.uid) {
+    headers = {
+      'x-pm-uid': srp.uid,
+      'Authorization': 'Bearer ' + srp.accessToken,
+      'accept': 'application/vnd.protonmail.v1+json',
+      'x-pm-appversion': srpAppVersion,
+    };
+    useCredentials = false;
+    srpCreds = srp;
+  } else {
+    const captured = await getCaptured();
+    const creds = (captured.proton || {})[idx];
+    if (!creds || !creds.uid) {
+      await diagLog(`[${acc.label || 'Proton ' + idx}] 无凭证：打开一次 mail.proton.me 登录，等加载完会自动抄 x-pm-uid，之后后台调 conversations`);
+      return { ...acc, status: 'need-tab', unread: acc.unread || 0, lastCheck: Date.now() };
+    }
+    headers = {
+      'x-pm-uid': creds.uid,
+      'accept': creds.accept || 'application/vnd.protonmail.v1+json',
+      'x-pm-appversion': creds.appversion || 'web-mail@5.0.142.3',
+    };
+    useCredentials = true;
   }
-  const headers = {
-    'x-pm-uid': creds.uid,
-    'accept': creds.accept || 'application/vnd.protonmail.v1+json',
-    'x-pm-appversion': creds.appversion || 'web-mail@5.0.41.4',
-  };
+  // SRP token 续期一次：401 时拿 refresh_token 换新 token，存回去，重建 headers，调用方重试当前页
+  async function tryRefreshProton() {
+    if (!srpCreds || refreshed) return false;
+    refreshed = true;
+    const nt = await ProtonSRP.refreshProtonToken(srpCreds.uid, srpCreds.refreshToken);
+    if (!nt) { await diagLog(`[${acc.label || 'Proton ' + idx}] SRP 刷新失败：refresh_token 过期，需在设置页重新登录 Proton`); return false; }
+    const all = await getProtonSrpTokens();
+    all[emailKey] = { uid: srpCreds.uid, accessToken: nt.accessToken, refreshToken: nt.refreshToken, email: srpCreds.email || emailKey, updatedAt: Date.now() };
+    await saveProtonSrpTokens(all);
+    srpCreds = all[emailKey];
+    headers = {
+      'x-pm-uid': srpCreds.uid,
+      'Authorization': 'Bearer ' + srpCreds.accessToken,
+      'accept': 'application/vnd.protonmail.v1+json',
+      'x-pm-appversion': srpAppVersion,
+    };
+    await diagLog(`[${acc.label || 'Proton ' + idx}] SRP token 已自动续期`);
+    return true;
+  }
   const PAGE = 100, MAX_PAGES = 10;
   let totalUnread = 0, unreadConvCount = 0, totalConvs = Infinity, fetched = 0, pages = 0;
   const unreadConvs = [];
   try {
     while (pages < MAX_PAGES) {
       const res = await fetch(`https://mail.proton.me/api/mail/v4/conversations?LabelID=0&Page=${pages}&PageSize=${PAGE}`, {
-        method: 'GET', credentials: 'include', headers,
+        method: 'GET', credentials: useCredentials ? 'include' : 'omit', headers,
       });
-      if (res.status === 401 || res.status === 403) { await diagLog(`[${acc.label || 'Proton ' + idx}] 后台查：HTTP ${res.status}，凭证过期，重开一次 mail.proton.me 重抄`); return { ...acc, status: 'need-tab', unread: acc.unread || 0, lastCheck: Date.now() }; }
+      if (res.status === 401 || res.status === 403) {
+        if (await tryRefreshProton()) continue; // 续上了，重试同一页
+        await diagLog(`[${acc.label || 'Proton ' + idx}] 后台查：HTTP ${res.status}，凭证过期，重开一次 mail.proton.me 重抄`); return { ...acc, status: 'need-tab', unread: acc.unread || 0, lastCheck: Date.now() };
+      }
       if (!res.ok) { await diagLog(`[${acc.label || 'Proton ' + idx}] 后台查：HTTP ${res.status}`); return { ...acc, status: 'error:' + res.status, unread: acc.unread || 0, lastCheck: Date.now() }; }
       const obj = await res.json();
       const list = Array.isArray(obj?.Conversations) ? obj.Conversations : [];
@@ -498,7 +549,7 @@ async function checkProtonAccount(acc) {
         const spamConvs = [];
         while (spamPages < 3 && spamConvs.length < 10) {
           const sres = await fetch(`https://mail.proton.me/api/mail/v4/conversations?LabelID=4&Page=${spamPages}&PageSize=${PAGE}`, {
-            method: 'GET', credentials: 'include', headers,
+            method: 'GET', credentials: useCredentials ? 'include' : 'omit', headers,
           });
           if (!sres.ok) break;
           const sobj = await sres.json();
@@ -552,25 +603,63 @@ async function checkProtonAccount(acc) {
 // 标已读 PUT /mail/v4/conversations/read {IDs}；
 // 归档/删除都是 PUT /mail/v4/conversations/label {LabelID, IDs}，
 // 归档 LabelID='6'，删除是移到垃圾箱 LabelID='3'（可恢复；彻底删除是另一个接口，这里不用）。
-// 跟查未读同一套抄头。401/403 -> 凭证过期，返回 need-tab（重开一次标签页重抄）。
+// v1.15.79：写操作优先用 SRP token（跟查未读同一套，401 时自动续期一次再试）；没有 SRP 才走抄来的浏览器会话
 async function protonApiCall(accountId, method, path, body) {
   const accounts = await getAccounts();
   const acc = accounts.find(a => a.id === accountId);
   const idx = String((acc && acc.index) ?? 0);
   const captured = await getCaptured();
   const creds = (captured.proton || {})[idx];
-  if (!creds || !creds.uid) return { ok: false, error: 'need-tab' };
-  try {
-    const res = await fetch('https://mail.proton.me/api' + path, {
-      method, credentials: 'include',
-      headers: {
-        'x-pm-uid': creds.uid,
-        'accept': creds.accept || 'application/vnd.protonmail.v1+json',
-        'x-pm-appversion': creds.appversion || 'web-mail@5.0.41.4',
-        'Content-Type': 'application/json',
-      },
+  const appVersion = ((captured.proton || {})[idx] || {}).appversion || 'web-mail@5.0.142.3';
+  const emailKey = String((acc && (acc.email || acc.label)) || '').toLowerCase();
+  const srpTokens = await getProtonSrpTokens();
+  const srp = emailKey ? srpTokens[emailKey] : null;
+  let headers, useCredentials = true;
+  if (srp && srp.accessToken && srp.uid) {
+    headers = {
+      'x-pm-uid': srp.uid,
+      'Authorization': 'Bearer ' + srp.accessToken,
+      'accept': 'application/vnd.protonmail.v1+json',
+      'x-pm-appversion': appVersion,
+      'Content-Type': 'application/json',
+    };
+    useCredentials = false;
+  } else {
+    if (!creds || !creds.uid) return { ok: false, error: 'need-tab' };
+    headers = {
+      'x-pm-uid': creds.uid,
+      'accept': creds.accept || 'application/vnd.protonmail.v1+json',
+      'x-pm-appversion': creds.appversion || 'web-mail@5.0.142.3',
+      'Content-Type': 'application/json',
+    };
+    useCredentials = true;
+  }
+  async function doFetch(hdrs, credsFlag) {
+    return fetch('https://mail.proton.me/api' + path, {
+      method, credentials: credsFlag ? 'include' : 'omit',
+      headers: hdrs,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  }
+  try {
+    let res = await doFetch(headers, useCredentials);
+    if ((res.status === 401 || res.status === 403) && srp && srp.refreshToken) {
+      const nt = await ProtonSRP.refreshProtonToken(srp.uid, srp.refreshToken);
+      if (nt) {
+        const all = await getProtonSrpTokens();
+        all[emailKey] = { uid: srp.uid, accessToken: nt.accessToken, refreshToken: nt.refreshToken, email: srp.email || emailKey, updatedAt: Date.now() };
+        await saveProtonSrpTokens(all);
+        headers = {
+          'x-pm-uid': srp.uid,
+          'Authorization': 'Bearer ' + nt.accessToken,
+          'accept': 'application/vnd.protonmail.v1+json',
+          'x-pm-appversion': appVersion,
+          'Content-Type': 'application/json',
+        };
+        await diagLog(`[Proton 操作] SRP token 已自动续期`);
+        res = await doFetch(headers, false);
+      }
+    }
     if (res.status === 401 || res.status === 403) {
       await diagLog(`[Proton 操作] HTTP ${res.status}，凭证过期，重开一次 mail.proton.me 重抄`);
       return { ok: false, error: 'need-tab' };
@@ -914,6 +1003,114 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
+// v1.15.70：设置页发来的 Proton SRP 登录（输密码登录一次，拿 refresh_token 以后自己续；密码只在内存里用一次，绝不存）
+// msg: { type:'mmn-proton-srp-login', email, password, totp? }
+// 成功回 { ok:true, email }；需 2FA 回 { ok:false, need2fa:true, uid, accessToken, refreshToken }（调用方再发 mmn-proton-srp-2fa）
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'mmn-proton-srp-login') return;
+  (async () => {
+    try {
+      const email = String(msg.email || '').trim().toLowerCase();
+      if (!email || !msg.password) { sendResponse({ ok: false, error: '邮箱和密码都要填' }); return; }
+      // v1.15.71：SRP 发请求前先拿浏览器里抄到的真实 appversion（写死的旧版会被 Proton 422“网页已过期”拦）
+      try {
+        const cap = await getCaptured();
+        const anyCred = Object.values(cap.proton || {})[0];
+        if (anyCred && anyCred.appversion) ProtonSRP.setAppVersion(anyCred.appversion);
+      } catch {}
+      let r;
+      try {
+        r = await ProtonSRP.srpLogin(email, msg.password);
+      } catch (e) {
+        if (e && e.code === 'NEED_2FA') { sendResponse({ ok: false, need2fa: true, uid: e.uid, accessToken: e.accessToken, refreshToken: e.refreshToken, email }); return; }
+        throw e;
+      }
+      const all = await getProtonSrpTokens();
+      all[email] = { uid: r.uid, accessToken: r.accessToken, refreshToken: r.refreshToken, email, updatedAt: Date.now() };
+      await saveProtonSrpTokens(all);
+      await diagLog(`[Proton SRP ${email}] 登录成功，已拿 refresh_token（以后自动续）`);
+      // 登录完马上查一次未读
+      const accounts = await getAccounts();
+      const acc = accounts.find(a => a.provider === 'proton' && (a.email || '').toLowerCase() === email);
+      if (acc) {
+        const updated = await checkProtonAccount(acc);
+        const merged = await saveAccountsMerged(accounts.map(a => a.id === acc.id ? updated : a));
+        await updateBadge(merged);
+      }
+      sendResponse({ ok: true, email });
+    } catch (e) {
+      await diagLog(`[Proton SRP] 登录失败：${e && e.message ? e.message : e}`);
+      sendResponse({ ok: false, error: (e && e.message) || String(e) });
+    }
+  })();
+  return true;
+});
+
+// v1.15.70：Proton SRP 的 2FA（TOTP 六位码）
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'mmn-proton-srp-2fa') return;
+  (async () => {
+    try {
+      const email = String(msg.email || '').trim().toLowerCase();
+      const r = await ProtonSRP.srpLogin2fa(msg.uid, msg.accessToken, msg.refreshToken, msg.totp);
+      const all = await getProtonSrpTokens();
+      all[email] = { uid: r.uid, accessToken: r.accessToken, refreshToken: r.refreshToken, email, updatedAt: Date.now() };
+      await saveProtonSrpTokens(all);
+      await diagLog(`[Proton SRP ${email}] 2FA 通过，登录成功`);
+      const accounts = await getAccounts();
+      const acc = accounts.find(a => a.provider === 'proton' && (a.email || '').toLowerCase() === email);
+      if (acc) {
+        const updated = await checkProtonAccount(acc);
+        const merged = await saveAccountsMerged(accounts.map(a => a.id === acc.id ? updated : a));
+        await updateBadge(merged);
+      }
+      sendResponse({ ok: true, email });
+    } catch (e) {
+      sendResponse({ ok: false, error: (e && e.message) || String(e) });
+    }
+  })();
+  return true;
+});
+
+// v1.15.70：设置页发来的 Proton SRP 登出（删掉存的 token）
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'mmn-proton-srp-logout') return;
+  (async () => {
+    const email = String(msg.email || '').trim().toLowerCase();
+    const all = await getProtonSrpTokens();
+    delete all[email];
+    await saveProtonSrpTokens(all);
+    sendResponse({ ok: true });
+  })();
+  return true;
+});
+
+// v1.15.70：设置页读 Proton SRP 登录状态（只回邮箱列表，不回 token 值）
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'mmn-proton-srp-list') return;
+  (async () => {
+    const all = await getProtonSrpTokens();
+    sendResponse({ ok: true, emails: Object.keys(all) });
+  })();
+  return true;
+});
+
+// v1.15.80：操作成功后立刻在本地把这封拿掉、未读数减 1（不等重查）。
+// 刚操作完立刻重查会撞上服务器同步延迟——删完的邮件还可能在列表里，弹窗一读又把它画回来，
+// 要等下次 30 秒检查才真消失。下次定时检查再跟服务器对齐。
+async function dropMessageFromStoredAccount(accountId, messageId) {
+  const accounts = await getAccounts();
+  const acc = accounts.find(a => a.id === accountId);
+  if (!acc) return null;
+  const before = (acc.messages || []).length;
+  const next = (acc.messages || []).filter(m => m.id !== messageId);
+  if (next.length === before) return null;
+  const updated = { ...acc, messages: next, unread: Math.max(0, (acc.unread || 0) - 1) };
+  const merged = await saveAccountsMerged(accounts.map(a => a.id === acc.id ? updated : a));
+  await updateBadge(merged);
+  return merged;
+}
+
 // 弹窗发来的 Outlook 操作：标已读 / 归档 / 删除（成功后重查一次刷新列表和未读数）
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== 'mmn-outlook-action') return;
@@ -925,14 +1122,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // v1.14.0 安静标已读（点开邮件时自动标已读）：不重查、不改 badge，
     // 免得正读着弹窗列表被刷新掉；弹窗自己维护计数，下次定时检查再对齐
     if (msg.quiet) { sendResponse({ ok: true }); return; }
-    const accounts = await getAccounts();
-    const acc = accounts.find(a => a.id === msg.accountId);
-    if (acc) {
-      const updated = await checkOutlookAccount(acc);
-      const next = accounts.map(a => a.id === acc.id ? updated : a);
-      const merged = await saveAccountsMerged(next);
-      await updateBadge(merged);
-    }
+    await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
     sendResponse({ ok: true });
   })();
   return true;
@@ -1093,14 +1283,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // v1.14.0 安静标已读（点开邮件时自动标已读）：不重查、不改 badge，
     // 免得正读着弹窗列表被刷新掉；弹窗自己维护计数，下次定时检查再对齐
     if (msg.quiet) { sendResponse({ ok: true }); return; }
-    const accounts = await getAccounts();
-    const acc = accounts.find(a => a.id === msg.accountId);
-    if (acc) {
-      const updated = await checkGmailAccount(acc);
-      const next = accounts.map(a => a.id === acc.id ? updated : a);
-      const merged = await saveAccountsMerged(next);
-      await updateBadge(merged);
-    }
+    await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
     sendResponse({ ok: true });
   })();
   return true;
@@ -1114,14 +1297,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!fn) { sendResponse({ ok: false, error: '未知操作' }); return; }
     const r = await fn(msg.accountId, msg.messageId);
     if (!r.ok) { sendResponse({ ok: false, error: r.error }); return; }
-    const accounts = await getAccounts();
-    const acc = accounts.find(a => a.id === msg.accountId);
-    if (acc) {
-      const updated = await checkProtonAccount(acc);
-      const next = accounts.map(a => a.id === acc.id ? updated : a);
-      const merged = await saveAccountsMerged(next);
-      await updateBadge(merged);
-    }
+    await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
     sendResponse({ ok: true });
   })();
   return true;

@@ -156,6 +156,9 @@ h1 img{width:26px;height:26px;border-radius:7px;box-shadow:0 2px 6px rgba(0,0,0,
 /* v1.14.0：弹窗内读全文 */
 .msg-body{margin-top:8px;padding:10px 11px;background:var(--card);border:1px solid var(--border);border-radius:10px;font-size:13px;line-height:1.65;color:var(--text);white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;cursor:text}
 .msg-body.loading{color:var(--text-2)}
+/* v1.15.78：正文里的链接（点开新标签页） */
+.msg-body-text a.body-link{color:#1a73e8;text-decoration:underline;cursor:pointer;word-break:break-all}
+.msg-body-text a.body-link:hover{color:#0b57d0}
 .reader-tools{display:flex;gap:14px;margin-top:9px}
 .reader-tools a{cursor:pointer}
 .compose-toggle{cursor:pointer;margin-top:9px;border:1px solid var(--border);background:var(--card);border-radius:999px;padding:5px 13px;font-size:12.5px;font-weight:600;color:var(--text);transition:transform .35s var(--spring),background .25s var(--ease),border-color .25s var(--ease)}

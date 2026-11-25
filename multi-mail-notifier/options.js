@@ -208,23 +208,36 @@ async function load() {
   }
   if (!gmailAccs.length) gmailLoginEl.textContent = '还没有 Gmail 账号，先在上面添加一个（或点“自动发现 Gmail 账号”），再点“登录”。';
 
-  // 登录凭证卡：Outlook 只显示登录状态（不显示 token 值），Proton 显示抓到的头
-  const { captured = {} } = await chrome.storage.local.get(['captured']);
-  const fmtProton = (o) => Object.keys(o || {}).sort().map(k => {
-    const c = o[k];
-    const t = c.capturedAt ? new Date(c.capturedAt).toLocaleString() : '';
-    return `${k} 号：已抓到（${t}）`;
-  }).join('<br>') || '还没抓到，打开一次对应网页版再点检查';
-  const outlookState = outlookAccs.map(a => {
-    const tok = outlookTokens[a.id];
-    return `${a.label || a.email || 'Outlook'}：${tok && tok.access_token ? '已登录' : '未登录'}`;
-  }).join('<br>') || '还没有 Outlook 账号';
-  const gmailState = gmailAccs.map(a => {
-    const tok = gmailTokens[a.id];
-    return `${a.label || a.email || 'Gmail'}：${tok && tok.access_token ? '已登录' : '未登录'}`;
-  }).join('<br>') || '还没有 Gmail 账号';
-  document.getElementById('captured').innerHTML =
-    'Gmail（Gmail API OAuth）：<br>' + gmailState + '<br>Outlook（Graph OAuth）：<br>' + outlookState + '<br>Proton：<br>' + fmtProton(captured.proton);
+  // v1.15.70：Proton SRP 登录状态（只显示已登录的邮箱，不显示 token 值）
+  const protonSrpEl = document.getElementById('protonSrpList');
+  if (protonSrpEl) {
+    protonSrpEl.innerHTML = '';
+    const r = await chrome.runtime.sendMessage({ type: 'mmn-proton-srp-list' }).catch(() => null);
+    const srpEmails = (r && r.emails) || [];
+    const protonAccs = accounts.filter(x => x.provider === 'proton');
+    for (const a of protonAccs) {
+      const em = (a.email || '').toLowerCase();
+      const row = document.createElement('div');
+      const name = document.createElement('span');
+      name.textContent = a.label || a.email || 'Proton';
+      const pill = document.createElement('span');
+      const logged = em && srpEmails.includes(em);
+      pill.className = 'pill ' + (logged ? 'on' : 'off');
+      pill.textContent = logged ? '已登录（SRP，自动续期）' : (a.status === 'need-tab' ? '未登录（SRP 或重开网页）' : (a.status || '未登录'));
+      row.append(name, pill);
+      if (logged) {
+        const outBtn = document.createElement('button');
+        outBtn.textContent = '登出';
+        outBtn.onclick = async () => {
+          await chrome.runtime.sendMessage({ type: 'mmn-proton-srp-logout', email: em });
+          load();
+        };
+        row.append(outBtn);
+      }
+      protonSrpEl.append(row);
+    }
+    if (!protonAccs.length) protonSrpEl.textContent = '还没有 Proton 账号，先在上面添加一个。';
+  }
 }
 
 async function applyMsClientIdChoice() {
@@ -268,6 +281,79 @@ document.getElementById('copyRedirectUriBtn').onclick = async () => {
   await navigator.clipboard.writeText(chrome.identity.getRedirectURL('microsoft'));
   document.getElementById('msClientIdSaved').textContent = '回调地址已复制 ✓ 注册 Azure 应用时贴进去';
   setTimeout(() => { document.getElementById('msClientIdSaved').textContent = ''; }, 2500);
+};
+
+// v1.15.72：密码显示开关（输错看不见是“登录凭据不正确”的常见原因）
+document.getElementById('protonSrpShowPass').onchange = (e) => {
+  document.getElementById('protonSrpPassword').type = e.target.checked ? 'text' : 'password';
+};
+
+// v1.15.70：Proton SRP 登录（密码只在这一刻发去后台算证明，用完就清输入框，绝不保存）
+let protonSrpPending2fa = null;
+document.getElementById('protonSrpLoginBtn').onclick = async () => {
+  const statusEl = document.getElementById('protonSrpStatus');
+  const email = document.getElementById('protonSrpEmail').value.trim();
+  const password = document.getElementById('protonSrpPassword').value;
+  const totpRow = document.getElementById('protonSrpTotpRow');
+  const totp = document.getElementById('protonSrpTotp').value.trim();
+  if (!email || !password) { statusEl.textContent = '邮箱和密码都要填'; return; }
+  statusEl.textContent = '登录中…（SRP 算证明，请稍等）';
+  document.getElementById('protonSrpLoginBtn').disabled = true;
+  try {
+    if (protonSrpPending2fa && totp) {
+      // 第二步：发 TOTP
+      const r2 = await chrome.runtime.sendMessage({ type: 'mmn-proton-srp-2fa', email, uid: protonSrpPending2fa.uid, accessToken: protonSrpPending2fa.accessToken, refreshToken: protonSrpPending2fa.refreshToken, totp });
+      if (!r2 || !r2.ok) { statusEl.textContent = '两步验证失败：' + (r2 && r2.error ? r2.error : '未知错误'); return; }
+      protonSrpPending2fa = null;
+      totpRow.hidden = true;
+      document.getElementById('protonSrpTotp').value = '';
+      document.getElementById('protonSrpPassword').value = '';
+      statusEl.textContent = '登录成功 ✓ 已拿 refresh_token，以后自动续';
+      load();
+      return;
+    }
+    const r = await chrome.runtime.sendMessage({ type: 'mmn-proton-srp-login', email, password });
+    document.getElementById('protonSrpPassword').value = ''; // 密码用完马上清掉
+    if (r && r.need2fa) {
+      protonSrpPending2fa = { uid: r.uid, accessToken: r.accessToken, refreshToken: r.refreshToken };
+      totpRow.hidden = false;
+      statusEl.textContent = '需要两步验证：填 6 位码再点一次登录';
+      document.getElementById('protonSrpTotp').focus();
+      return;
+    }
+    if (!r || !r.ok) { statusEl.textContent = '登录失败：' + (r && r.error ? r.error : '未知错误'); return; }
+    statusEl.textContent = '登录成功 ✓ 已拿 refresh_token，以后自动续';
+    load();
+  } finally {
+    document.getElementById('protonSrpLoginBtn').disabled = false;
+    setTimeout(() => { document.getElementById('protonSrpStatus').textContent = ''; }, 5000);
+  }
+};
+
+// v1.15.61：Gmail 中转 Worker 地址回显
+(async () => {
+  const { gmailTokenProxyUrl = '' } = await chrome.storage.local.get(['gmailTokenProxyUrl']);
+  const el = document.getElementById('gmailTokenProxyUrl');
+  if (el) el.value = gmailTokenProxyUrl || '';
+})();
+document.getElementById('saveGmailTokenProxyBtn').onclick = async () => {
+  const v = document.getElementById('gmailTokenProxyUrl').value.trim().replace(/\/$/, '');
+  await chrome.storage.local.set({ gmailTokenProxyUrl: v });
+  document.getElementById('gmailTokenProxySaved').textContent = v ? '已保存 ✓ 重新登录 Gmail 一次即可拿 refresh_token' : '已清空（走老流程）';
+  setTimeout(() => { document.getElementById('gmailTokenProxySaved').textContent = ''; }, 3000);
+};
+
+// v1.15.65：Outlook 中转 Worker 地址回显（照 Gmail 那节抄）
+(async () => {
+  const { msTokenProxyUrl = '' } = await chrome.storage.local.get(['msTokenProxyUrl']);
+  const el = document.getElementById('msTokenProxyUrl');
+  if (el) el.value = msTokenProxyUrl || '';
+})();
+document.getElementById('saveMsTokenProxyBtn').onclick = async () => {
+  const v = document.getElementById('msTokenProxyUrl').value.trim().replace(/\/$/, '');
+  await chrome.storage.local.set({ msTokenProxyUrl: v });
+  document.getElementById('msTokenProxySaved').textContent = v ? '已保存 ✓ 重新登录 Outlook 一次即可拿 90 天 refresh_token' : '已清空（用默认地址）';
+  setTimeout(() => { document.getElementById('msTokenProxySaved').textContent = ''; }, 3000);
 };
 
 document.getElementById('saveGoogleClientIdBtn').onclick = async () => {

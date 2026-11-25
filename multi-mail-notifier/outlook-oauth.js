@@ -5,14 +5,17 @@
  *
  * 新路线（Peekat / Conterminal 同款，官方 Microsoft Graph）：
  * 1. 用户在 entra.microsoft.com 免费注册一个 Azure 应用（个人账户，不要钱不用卡），
- *    账户类型选“多租户 + 个人”，Redirect URI 用 SPA 平台填
- *    https://<扩展 ID>.chromiumapp.org/microsoft，
+ *    账户类型选“多租户 + 个人”，Redirect URI 用 Web 平台填
+ *    https://<扩展 ID>.chromiumapp.org/microsoft（2026-11-23 从 SPA 改到 Web，
+ *    refresh token 从 24 小时变 90 天），
  *    API 权限加 Mail.ReadWrite + Mail.Send + offline_access，得到 Application (client) ID。
+ *    Web 平台是机密客户端，换 token 强制要 client_secret（v1.15.65 起走 Worker 中转，
+ *    密钥只放 Worker 里，不进插件包）。
  * 2. Client ID 默认用 Thunderbird 的公开 client ID（实测验证过：用这个
  *    client_id + 本扩展的 redirect_uri 请求微软授权地址，返回正常登录页，
  *    没有 AADSTS50011 报错）。用户也可以在设置页换成自己的 Azure 应用
- *    client ID。代码里不写死任何 secret；扩展是 public client，走 PKCE，
- *    不用 client secret。
+ *    client ID。代码里不写死任何 secret；换 token 走 Worker 中转（v1.15.65），
+ *    Worker 里补 client_secret，插件本身不存 secret。
  * 3. 每个 Outlook 账号单独点“登录”：chrome.identity.launchWebAuthFlow 打开微软登录页，
  *    prompt=select_account 强制选号，避免 Windows 静默 SSO 直接登进最后一个号。
  *    拿 code 换 access_token + refresh_token，按账号存本地。
@@ -47,6 +50,57 @@ const OWN_MS_CLIENT_ID = '8aacd0db-eeba-4300-9a7d-70a3c1d684c3';
 // 真正的校验在跳转到 live.com 之后才发生。
 // access_token 剩余有效期小于这个值就提前刷新
 const MS_TOKEN_REFRESH_MARGIN_MS = 120000;
+
+// ---------- Worker 中转：code / refresh_token 换 token（v1.15.65） ----------
+// Azure 回调从 SPA 改到 Web 平台后，refresh token 从 24 小时变 90 天，
+// 但 Web 平台是机密客户端，换 token 强制要 client_secret（不带报 AADSTS70002），
+// 插件是公开客户端存不了 secret，改发给 Worker；Worker 补上 secret 再转发，原样返回。
+// 跟 Gmail 的 Worker 一个套路，域名不同：mmn-outlook-oauth.bit.indevs.in。
+const MS_TOKEN_PROXY_DEFAULT = 'https://mmn-outlook-oauth.bit.indevs.in';
+async function getMsTokenProxyUrl() {
+  const r = await chrome.storage.local.get(['msTokenProxyUrl']);
+  let u = String(r.msTokenProxyUrl || MS_TOKEN_PROXY_DEFAULT || '').trim().replace(/\/$/, '');
+  return u;
+}
+// 走 Worker 把授权码换成 token。返回 { ok:true, accessToken, refreshToken, expiresIn, scope, idToken }
+// 或 { ok:false, error }。token 值只进 storage，永不写进诊断日志。
+async function exchangeMsCodeForTokens({ code, redirectUri, codeVerifier, clientId }) {
+  const proxyUrl = await getMsTokenProxyUrl();
+  if (!proxyUrl) return { ok: false, error: '没配 Outlook 中转 Worker 地址' };
+  let res, data;
+  try {
+    res = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, code_verifier: codeVerifier, client_id: clientId }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    return { ok: false, error: '中转 Worker 请求失败：' + String((e && e.message) || e || '') };
+  }
+  if (!res.ok || data.error) return { ok: false, error: '换 token 失败：' + (data.error ? data.error + (data.error_description ? ': ' + data.error_description : '') : ('HTTP ' + res.status)) };
+  if (!data.access_token) return { ok: false, error: '换 token 失败：没返回 access_token' };
+  return { ok: true, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresIn: Number(data.expires_in) || 3600, scope: data.scope || '', idToken: data.id_token || '' };
+}
+// 走 Worker 拿 refresh_token 换新 access_token。返回同上（refresh_token 续发时可能为空，沿用旧的）。
+async function refreshMsAccessTokenViaProxy({ refreshToken, clientId }) {
+  const proxyUrl = await getMsTokenProxyUrl();
+  if (!proxyUrl) return { ok: false, error: '没配 Outlook 中转 Worker 地址' };
+  let res, data;
+  try {
+    res = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    return { ok: false, error: '中转 Worker 请求失败：' + String((e && e.message) || e || '') };
+  }
+  if (!res.ok || data.error) return { ok: false, error: '刷新 token 失败：' + (data.error ? data.error + (data.error_description ? ': ' + data.error_description : '') : ('HTTP ' + res.status)) };
+  if (!data.access_token) return { ok: false, error: '刷新 token 失败：没返回 access_token' };
+  return { ok: true, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresIn: Number(data.expires_in) || 3600, scope: data.scope || '', idToken: data.id_token || '' };
+}
 
 // ---------- 小工具 ----------
 function b64urlEncode(bytes) {
@@ -200,35 +254,14 @@ async function startOutlookLogin(accountId) {
     await diagLog(`[Outlook 登录] ${who}：没拿到授权码或 state 对不上（可能被拦截）`);
     return { ok: false, error: '没拿到授权码或 state 对不上' };
   }
-  // 拿 code 换 token
-  let tokenData;
-  try {
-    const res = await fetch(MS_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: verifier,
-      }),
-    });
-    if (!res.ok) {
-      const errText = await safeErrorText(res);
-      await diagLog(`[Outlook 登录] ${who}：换 token 失败（${errText}）`);
-      return { ok: false, error: '换 token 失败：' + errText };
-    }
-    tokenData = await res.json();
-  } catch (e) {
-    const msg = String((e && e.message) || e);
-    await diagLog(`[Outlook 登录] ${who}：换 token 异常（${msg}）`);
-    return { ok: false, error: '换 token 异常：' + msg };
+  // 拿 code 换 token：走 Worker 中转（v1.15.65；Web 平台强制要 client_secret，
+  // 插件存不了，直接调微软会报 AADSTS70002）
+  const exchanged = await exchangeMsCodeForTokens({ code, redirectUri, codeVerifier: verifier, clientId });
+  if (!exchanged.ok) {
+    await diagLog(`[Outlook 登录] ${who}：${exchanged.error}`);
+    return { ok: false, error: exchanged.error };
   }
-  if (!tokenData.access_token) {
-    await diagLog(`[Outlook 登录] ${who}：微软没返回 access_token`);
-    return { ok: false, error: '微软没返回 access_token' };
-  }
+  const tokenData = { access_token: exchanged.accessToken, refresh_token: exchanged.refreshToken, expires_in: exchanged.expiresIn, scope: exchanged.scope, id_token: exchanged.idToken };
   // 邮箱：先从 id_token 读，拿不到再调 /me
   let email = parseJwtEmail(tokenData.id_token);
   if (tokenData.access_token) {
@@ -283,30 +316,23 @@ async function getValidOutlookAccessToken(accountId) {
   //（v1.15.3 之前只有它成功登过），不能用当前默认，否则已登录的号会被顶掉
   const clientId = t.clientId || OWN_MS_CLIENT_ID;
   if (!clientId) return null;
-  try {
-    const res = await fetch(MS_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        grant_type: 'refresh_token',
-        refresh_token: t.refresh_token,
-      }),
-    });
-    if (!res.ok) {
-      const errText = await safeErrorText(res);
-      if (/invalid_grant/i.test(errText)) {
-        // refresh_token 彻底失效（改密码/撤销授权）：删掉，下次重新登录
-        delete tokens[accountId];
-        await saveOutlookTokens(tokens);
-        await diagLog(`[Outlook] ${t.email || accountId}：刷新 token 失败（${errText}），需重新登录`);
-      } else {
-        // 网络或临时错误：留着 refresh_token，下次再试
-        await diagLog(`[Outlook] ${t.email || accountId}：刷新 token 失败（${errText}），下次重试`);
-      }
-      return null;
+  // 刷新也走 Worker 中转（v1.15.65；Web 平台强制要 client_secret，直接调微软会报 AADSTS70002）
+  const refreshed = await refreshMsAccessTokenViaProxy({ refreshToken: t.refresh_token, clientId });
+  if (!refreshed.ok) {
+    const errText = refreshed.error || '';
+    if (/invalid_grant/i.test(errText)) {
+      // refresh_token 彻底失效（改密码/撤销授权）：删掉，下次重新登录
+      delete tokens[accountId];
+      await saveOutlookTokens(tokens);
+      await diagLog(`[Outlook] ${t.email || accountId}：刷新 token 失败（${errText}），需重新登录`);
+    } else {
+      // 网络或临时错误：留着 refresh_token，下次再试
+      await diagLog(`[Outlook] ${t.email || accountId}：刷新 token 失败（${errText}），下次重试`);
     }
-    const data = await res.json();
+    return null;
+  }
+  {
+    const data = { access_token: refreshed.accessToken, refresh_token: refreshed.refreshToken, expires_in: refreshed.expiresIn, scope: refreshed.scope };
     tokens[accountId] = {
       access_token: data.access_token,
       refresh_token: data.refresh_token || t.refresh_token,
@@ -318,9 +344,6 @@ async function getValidOutlookAccessToken(accountId) {
     };
     await saveOutlookTokens(tokens);
     return { accessToken: data.access_token, email: t.email || '', scope: t.scope || '' };
-  } catch (e) {
-    await diagLog(`[Outlook] ${t.email || accountId}：刷新 token 异常（${String((e && e.message) || e)}），下次重试`);
-    return null;
   }
 }
 

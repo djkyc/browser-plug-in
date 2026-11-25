@@ -402,6 +402,40 @@ function closeReader(msgDiv, acc) {
   // v1.15.59：读的时候攒下的刷新，收起后补刷一次
   if (pendingRefresh) { pendingRefresh = false; load(); }
 }
+// v1.15.78：正文里的网址变成可点链接（新标签页打开）。正文仍是纯文本渲染，不注入邮件 HTML，
+// 只是把 http(s):// 和 www. 开头的串换成 <a>；末尾的句号/逗号/右括号等标点不算进网址。
+function linkifyText(el) {
+  const text = el.textContent;
+  if (!text || !/https?:\/\/|www\./.test(text)) return;
+  const urlRe = /(https?:\/\/[^\s<>"')\]\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+|www\.[^\s<>"')\]\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+)/g;
+  const frag = document.createDocumentFragment();
+  let last = 0, match;
+  while ((match = urlRe.exec(text)) !== null) {
+    let url = match[0];
+    const trail = url.match(/[.,;:!?)\]]+$/);
+    let suffix = '';
+    if (trail) { suffix = trail[0]; url = url.slice(0, -suffix.length); }
+    if (match.index > last) frag.append(document.createTextNode(text.slice(last, match.index)));
+    if (!url) {
+      frag.append(document.createTextNode(match[0]));
+    } else {
+      const a = document.createElement('a');
+      a.className = 'body-link';
+      a.textContent = url;
+      a.href = url.startsWith('www.') ? 'https://' + url : url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.title = '在新标签页打开';
+      a.onclick = (e) => { e.stopPropagation(); };
+      frag.append(a);
+      if (suffix) frag.append(document.createTextNode(suffix));
+    }
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) frag.append(document.createTextNode(text.slice(last)));
+  el.textContent = '';
+  el.append(frag);
+}
 async function openReader(msgDiv, acc, m) {
   const bodyEl = document.createElement('div');
   bodyEl.className = 'msg-body loading';
@@ -427,6 +461,7 @@ async function openReader(msgDiv, acc, m) {
   const bodyText = document.createElement('div');
   bodyText.className = 'msg-body-text';
   bodyText.textContent = res.text || '(没有正文)';
+  linkifyText(bodyText);
   bodyEl.append(bodyText);
   // v1.15.11：正文里提到的验证码（比标题+摘要准）——有就更新这行的徽标，没有就补一个
   if (res.code) {
@@ -456,12 +491,14 @@ async function openReader(msgDiv, acc, m) {
 async function toggleTranslate(bodyEl, bodyText, link, origText) {
   if (bodyEl._showingTrans) {
     bodyText.textContent = origText;
+    linkifyText(bodyText);
     bodyEl._showingTrans = false;
     link.textContent = '翻译';
     return;
   }
   if (bodyEl._transText) {
     bodyText.textContent = bodyEl._transText;
+    linkifyText(bodyText);
     bodyEl._showingTrans = true;
     link.textContent = '原文';
     return;
@@ -484,6 +521,7 @@ async function toggleTranslate(bodyEl, bodyText, link, origText) {
   }
   bodyEl._transText = res.text;
   bodyText.textContent = res.text;
+  linkifyText(bodyText);
   bodyEl._showingTrans = true;
   link.textContent = '原文';
 }

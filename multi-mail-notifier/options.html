@@ -89,6 +89,18 @@ body{margin:0;padding:28px 16px 48px;font:14px/1.65 system-ui,-apple-system,"SF 
 .card:hover{box-shadow:var(--shadow-hover)}
 .card h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:8px;color:var(--text)}
 .card h2::before{content:"";width:5px;height:18px;border-radius:3px;background:linear-gradient(180deg,#f04438,#d92d20)}
+/* v1.15.67：不常用的区块默认收起（details），点标题展开；summary 做成 h2 的样子 */
+details.card summary{font-size:16px;font-weight:700;margin:0;display:flex;align-items:center;gap:8px;color:var(--text);cursor:pointer;list-style:none}
+details.card summary::-webkit-details-marker{display:none}
+details.card summary::before{content:"";width:5px;height:18px;border-radius:3px;background:linear-gradient(180deg,#f04438,#d92d20);flex:none}
+details.card summary::after{content:"▸";margin-left:auto;color:var(--text-3);font-size:13px;transition:transform .2s var(--ease)}
+details.card[open ] summary::after{transform:rotate(90deg)}
+details.card summary + *{margin-top:12px}
+details.sub{margin-top:12px;border-top:1px solid var(--border);padding-top:10px}
+details.sub summary{font-size:13px;font-weight:600;color:var(--text-2);cursor:pointer;list-style:none}
+details.sub summary::-webkit-details-marker{display:none}
+details.sub summary::after{content:" ▸";color:var(--text-3)}
+details.sub[open ] summary::after{content:" ▾"}
 .note{background:var(--accent-soft);border:1px solid var(--accent-soft-border);border-radius:12px;padding:13px 15px;color:var(--text-2)}
 .note b{color:var(--accent)}
 .howto{margin-top:6px}
@@ -133,6 +145,7 @@ th{font-size:12px;color:var(--text-3);font-weight:700;letter-spacing:.4px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .row>*{margin:0}
 .cid-row{display:flex;align-items:center;gap:8px;margin:12px 0}
+.cid-row[hidden]{display:none}
 .cid-row>*{margin:0}
 .cid-label{display:inline-block;width:170px;flex:none}
 .cid-row select,.cid-row input[type=text],.cid-row input[type=password]{width:340px;flex:none}
@@ -163,15 +176,15 @@ a{color:var(--accent);text-decoration:none;font-weight:600}
 <div class="note">
 <b>不用输密码：</b>
 <div class="howto">
-<div><b>Gmail</b><span>不用建项目、不用填密钥：Client ID 是内置的，给每个号点“登录”，在 Google 登录页选号就行。token 约 1 小时，到期自动静默续。自动发现扫 u/0～u/4（2-3 个号就是 u/0、u/1、u/2），找到后也要各登一次。</span></div>
-<div><b>Outlook</b><span>默认用自己的 Azure 应用（下面那个就是，改不了也不用改），每个号点“登录”即可，互不干扰。能回邮件、标已读、归档、删除、写邮件；Azure 应用要加 Mail.ReadWrite、Mail.Send 权限，旧 token 只有读权限，四个号都要重登一次。</span></div>
-<div><b>Proton</b><span>先在标签页登好 <a href="https://mail.proton.me" target="_blank">mail.proton.me</a>，等加载完，扩展抄下会话头再查未读；过期重开一次。用的还是 Email Notifier 同款内部接口，不是官方登录。</span></div>
+<div><b>Gmail</b><span>给每个号点“登录”，在 Google 登录页选号就行，token 到期自动续。</span></div>
+<div><b>Outlook</b><span>每个号点“登录”即可，互不干扰；能回邮件、标已读、归档、删除。</span></div>
+<div><b>Proton</b><span>先在标签页登好 <a href="https://mail.proton.me" target="_blank">mail.proton.me</a>，等加载完，扩展抄下会话头再查未读；过期重开一次。</span></div>
 </div>
 </div>
 </div>
 
-<div class="card">
-<h2>账号</h2>
+<details class="card">
+<summary>账号</summary>
 <table id="accTable"><thead><tr><th></th><th>服务商</th><th>标签 / 邮箱</th><th>序号</th><th>未读</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>
 <p class="row" style="margin-top:14px">
   <select id="newProvider"><option value="gmail">Gmail</option><option value="outlook">Outlook</option><option value="proton">Proton</option></select>
@@ -186,10 +199,12 @@ a{color:var(--accent);text-decoration:none;font-weight:600}
   <button id="discoverOutlookBtn">从标签页发现 Outlook 账号</button>
   <button id="discoverTabsBtn">从标签页发现 Proton 账号</button>
 </p>
-</div>
+</details>
 
-<div class="card">
-<h2>Gmail 登录（Gmail API OAuth）</h2>
+<details class="card">
+<summary>Gmail 登录（Gmail API OAuth）</summary>
+<details class="sub">
+<summary>高级设置（Client ID / 回调地址 / 中转 Worker）</summary>
 <p class="muted">本扩展的 Google 登录回调地址：<br><code id="googleRedirectUri">…</code> <button id="copyGoogleRedirectUriBtn">复制</button></p>
 <p class="cid-row"><span class="cid-label">Google Client ID：</span>
 <select id="googleClientIdChoice">
@@ -199,12 +214,17 @@ a{color:var(--accent);text-decoration:none;font-weight:600}
 </p>
 <p class="cid-row"><span class="cid-label">Client ID 值：</span><input id="googleClientId" type="text" placeholder="选“自定义”时在这里填 client ID"></p>
 <p class="row"><button id="saveGoogleClientIdBtn" class="primary">保存 Google 凭据</button> <span id="googleClientIdSaved"></span></p>
+<p class="cid-row"><span class="cid-label">中转 Worker 地址：</span><input id="gmailTokenProxyUrl" type="text" placeholder="https://<worker名>.<你的子域>.workers.dev（不填=没配，走老流程）"></p>
+<p class="row"><button id="saveGmailTokenProxyBtn" class="primary">保存 Worker 地址</button> <span id="gmailTokenProxySaved"></span></p>
+</details>
 <div id="gmailLoginList">正在加载…</div>
-<p class="muted">点“登录”会打开 Google 登录页（强制选号）。登录成功后自动填邮箱、自动查未读。token 有效期约 1 小时，到期自动静默续（浏览器里还登着 Google 就不用再点登录）。token 只存本地，设置页永不显示 token 值。注意：Google OAuth 同意屏幕要是“测试”状态，得把自己的 Gmail 加为测试用户，否则登不进去。</p>
-</div>
+<p class="muted">点“登录”打开 Google 登录页选号，成功后自动查未读。token 约 1 小时，到期自动续；配好 Worker 并重登一次后拿 refresh_token，长期有效。token 只存本地，不显示值。注意：Google 同意屏幕要是“测试”状态，得把自己的 Gmail 加为测试用户。</p>
+</details>
 
-<div class="card">
-<h2>Outlook 登录（Microsoft Graph OAuth）</h2>
+<details class="card">
+<summary>Outlook 登录（Microsoft Graph OAuth）</summary>
+<details class="sub">
+<summary>高级设置（Client ID / 回调地址 / 中转 Worker）</summary>
 <p class="muted">本扩展的登录回调地址：<br><code id="redirectUri">…</code> <button id="copyRedirectUriBtn">复制</button></p>
 <p class="cid-row"><span class="cid-label">Microsoft Client ID：</span>
 <select id="msClientIdChoice">
@@ -214,12 +234,25 @@ a{color:var(--accent);text-decoration:none;font-weight:600}
 </p>
 <p class="cid-row"><span class="cid-label">Client ID 值：</span><input id="msClientId" type="text" placeholder="选“自定义”时在这里填 client ID"></p>
 <p class="row"><button id="saveMsClientIdBtn" class="primary">保存 Client ID</button> <span id="msClientIdSaved"></span></p>
+<p class="cid-row"><span class="cid-label">中转 Worker 地址：</span><input id="msTokenProxyUrl" type="text" placeholder="https://mmn-outlook-oauth.bit.indevs.in（不填=用默认）"></p>
+<p class="row"><button id="saveMsTokenProxyBtn" class="primary">保存 Worker 地址</button> <span id="msTokenProxySaved"></span></p>
+</details>
 <div id="outlookLoginList">正在加载…</div>
-<p class="muted">点“登录”会打开微软登录页（强制选号，不会静默登进最后一个号）。登录成功后自动填邮箱、自动查未读。token 到期自动刷新，刷新失败才需要重新登录。token 只存本地，设置页永不显示 token 值。</p>
-</div>
+<p class="muted">点“登录”打开微软登录页选号，成功后自动查未读。token 到期自动刷新；配好 Worker 并重登一次后拿 90 天 refresh_token，长期有效。token 只存本地，不显示值。</p>
+</details>
 
-<div class="card">
-<h2>提醒</h2>
+<details class="card">
+<summary>Proton 登录（SRP，长期有效）</summary>
+<p class="cid-row"><span class="cid-label">Proton 邮箱：</span><input id="protonSrpEmail" type="text" placeholder="如 name@proton.me" autocomplete="off"></p>
+<p class="cid-row"><span class="cid-label">密码：</span><input id="protonSrpPassword" type="text" placeholder="Proton 密码（只在登录这一刻用，绝不保存）" autocomplete="off"> <label style="white-space:nowrap"><input id="protonSrpShowPass" type="checkbox" checked> 显示密码</label></p>
+<p class="cid-row" id="protonSrpTotpRow" hidden><span class="cid-label">两步验证：</span><input id="protonSrpTotp" type="text" placeholder="6 位验证码" autocomplete="off" maxlength="6"></p>
+<p class="row"><button id="protonSrpLoginBtn" class="primary">登录 Proton</button> <span id="protonSrpStatus"></span></p>
+<div id="protonSrpList">正在加载…</div>
+<p class="muted">Proton 没有 OAuth 刷新流程，之前只能抄浏览器会话，会话过期就得重开网页。这一版改走 SRP 登录：密码只在登录这一刻算证明用（不传明文、不保存），登录后拿 refresh_token 存本地，到期自动续，长期有效。开了两步验证的号，登录时会要 6 位码。</p>
+</details>
+
+<details class="card">
+<summary>提醒设置</summary>
 <label>检查间隔（分钟）：<input id="interval" type="number" min="0.5" max="60" step="0.5" value="0.5"></label>
 <label><input id="desktopNotif" type="checkbox"> 新邮件桌面通知</label>
 <label><input id="autoUpdateCheck" type="checkbox"> 自动检查更新（每天去 GitHub 查一次新版本，有新版就弹通知；关掉就不查了）</label>
@@ -230,41 +263,29 @@ a{color:var(--accent);text-decoration:none;font-weight:600}
 <label>徽标颜色：<input id="badgeColor" type="color" value="#d93025"></label>
 <label>外观（护眼）：<span class="theme-seg" id="themeSeg"><button type="button" data-theme="auto">自动</button><button type="button" data-theme="dark">暗黑</button><button type="button" data-theme="light">白色</button></span> <span class="muted">自动跟系统走</span></label>
 <p><button id="saveBtn" class="primary">保存设置</button> <span id="saved"></span></p>
-</div>
+</details>
 
-<div class="card">
-<h2>更新</h2>
+<details class="card">
+<summary>更新</summary>
 <p class="muted">当前版本：<code id="curVersion">…</code>　<span id="updateStatus">还没检查过。</span></p>
 <p class="row"><button id="updateCheckNowBtn" class="primary">立即检查更新</button> <span id="updateChecked"></span></p>
-<p class="muted">新版本在 GitHub 发布（Releases）。扩展不能自己给自己换代码（Chrome 不允许），查到新版后点通知里的链接去下载新 zip，解压覆盖安装后点扩展卡片上的刷新。想完全静默自动更新，只能上架 Chrome 应用商店。</p>
-</div>
+</details>
 
-<div class="card">
-<h2>联系作者</h2>
-<p class="muted">作者：djkyc　·　<a href="https://github.com/djkyc/browser-plug-in" target="_blank">GitHub 仓库</a>　·　<a href="https://github.com/djkyc/browser-plug-in/issues" target="_blank">反馈问题 / 提建议</a>　·　<a href="https://t.me/djkyc" target="_blank">Telegram @djkyc</a></p>
-<p class="muted">用着有问题、想加功能，去 GitHub 提个 Issue 就行。</p>
-</div>
-
-<div class="card">
-<h2>诊断（<span id="extVersion">…</span>，装好后把这里的日志贴给我，我直接看问题在哪）</h2>
+<details class="card">
+<summary>诊断（<span id="extVersion">…</span>，装好后把这里的日志贴给我，我直接看问题在哪）</summary>
 <p class="note">每次检查都记一行：凭证有没有抓到、后台查返回什么状态码、解析到未读数没有。<b>日志里不含 SID 和请求头的值</b>，只含时间和结果，放心贴。</p>
 <p class="row"><button id="diagCheckBtn" class="primary">立即检查一次</button> <button id="diagRefreshBtn">刷新日志</button> <button id="diagCopyBtn">复制诊断日志</button> <button id="diagClearBtn">清空日志</button> <span id="diagSaved"></span></p>
 <pre id="diagLog">还没有日志。点“立即检查一次”，等 10 秒再点“刷新日志”。</pre>
-</div>
+</details>
 
-<div class="card">
-<h2>登录凭证（只存本地，不显示值）</h2>
-<p id="captured">加载中…</p>
-</div>
-
-<div class="card">
-<h2>数据</h2>
+<details class="card">
+<summary>数据</summary>
 <p class="muted">所有账号和设置只存在这台浏览器的 <code>chrome.storage.local</code> 里，不发到任何服务器。卸载扩展即删除。</p>
 <p class="row"><button id="dedupBtn">清理重复账号</button> <button id="resetBtn" class="danger">清空所有账号</button></p>
-</div>
+</details>
 
-<div class="card">
-<h2>WebDAV 备份</h2>
+<details class="card">
+<summary>WebDAV 备份</summary>
 <p class="muted">把账号和设置备份到你的 WebDAV 网盘，换电脑时再从这里恢复。只备份账号和设置，不备份登录 token 和 WebDAV 密码，恢复后去账号表里重新点“登录”即可。坚果云的密码要用“应用密码”（坚果云网页版 → 账户信息 → 安全选项 → 添加应用密码），不是登录密码。</p>
 <p class="cid-row"><span class="cid-label">服务器：</span><select id="davPreset"><option value="jianguoyun">坚果云</option><option value="infinicloud">InfiniCLOUD</option><option value="custom">自定义</option></select></p>
 <p class="cid-row"><span class="cid-label">WebDAV 地址：</span><input id="davUrl" type="text" placeholder="https://dav.jianguoyun.com/dav/"></p>
@@ -272,6 +293,12 @@ a{color:var(--accent);text-decoration:none;font-weight:600}
 <p class="cid-row"><span class="cid-label">密码：</span><input id="davPass" type="password" placeholder="WebDAV 密码 / 应用密码" autocomplete="off"></p>
 <p class="row"><button id="davUploadBtn" class="primary">备份到 WebDAV</button> <button id="davTestBtn">测试连接</button> <button id="davDownloadBtn">从 WebDAV 恢复</button> <span id="davStatus"></span></p>
 <div id="davBackupList"></div>
+</details>
+
+<div class="card">
+<h2>联系作者</h2>
+<p class="muted">作者：djkyc　·　<a href="https://github.com/djkyc/browser-plug-in" target="_blank">GitHub 仓库</a>　·　<a href="https://github.com/djkyc/browser-plug-in/issues" target="_blank">反馈问题 / 提建议</a>　·　<a href="https://t.me/djkyc" target="_blank">Telegram @djkyc</a></p>
+<p class="muted">用着有问题、想加功能，去 GitHub 提个 Issue 就行。</p>
 </div>
 </div>
 
