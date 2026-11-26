@@ -38,6 +38,14 @@ const MS_GRAPH_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/messages?$top
 const MS_GRAPH_JUNK_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail?$select=unreadItemCount';
 const MS_GRAPH_JUNK_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages?$top=10&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$filter=isRead eq false&$orderby=receivedDateTime desc';
 const MS_OAUTH_SCOPE = 'openid profile email offline_access Mail.ReadWrite Mail.Send';
+// v1.15.81：微软发 token 回来的 scope 顺序不保证跟要的一样，字符串原样比对会误判成“权限不够”。
+// 按集合比：拆空格、去重、排序再比（跟 gmail-oauth.js 里同名函数一个逻辑，两文件各存一份）。
+function normalizeOAuthScope(s) {
+  return [...new Set(String(s || '').split(/\s+/).filter(Boolean))].sort().join(' ');
+}
+function sameOAuthScope(a, b) {
+  return normalizeOAuthScope(a) === normalizeOAuthScope(b);
+}
 // 默认 client ID：用户自己的 Azure 应用 MultiMailNotifier 的 client ID（public client，不含 secret）。
 // Thunderbird 的公开 client ID 也留在设置页里可选（实测可用）。
 // 设置页提供选择：自己的 Azure 应用（默认）/ Thunderbird 公开 ID / 自定义。
@@ -358,7 +366,7 @@ async function checkOutlookAccount(acc) {
   if (!tok) {
     return { ...acc, status: 'need-login', unread: acc.unread || 0, lastCheck: Date.now() };
   }
-  const needsRescope = (tok.scope || '') !== MS_OAUTH_SCOPE;
+  const needsRescope = !sameOAuthScope(tok.scope || '', MS_OAUTH_SCOPE);
   // 只在第一次发现 scope 旧了的时候记一行，别每分钟刷日志
   if (needsRescope && !acc.needsRescope) await diagLog(`[${who}] token 还是旧权限（只有读），未读照常查；回邮件/标已读要重新登录授权一次`);
   try {
@@ -455,7 +463,7 @@ async function isOutlookScopeStale(accountId) {
   const tokens = await getOutlookTokens();
   const t = tokens[accountId];
   if (!t) return true;
-  return (t.scope || '') !== MS_OAUTH_SCOPE;
+  return !sameOAuthScope(t.scope || '', MS_OAUTH_SCOPE);
 }
 
 // Graph 写操作通用：成功 {ok:true}；
@@ -463,7 +471,7 @@ async function isOutlookScopeStale(accountId) {
 async function outlookGraphCall(accountId, method, url, body) {
   const tok = await getValidOutlookAccessToken(accountId);
   if (!tok) return { ok: false, error: 'need-login' };
-  if ((tok.scope || '') !== MS_OAUTH_SCOPE) return { ok: false, error: 'need-rescope' };
+  if (!sameOAuthScope(tok.scope || '', MS_OAUTH_SCOPE)) return { ok: false, error: 'need-rescope' };
   try {
     const res = await fetch(url, {
       method,

@@ -73,6 +73,14 @@ const G_API_BASE = 'https://gmail.googleapis.com/gmail/v1';
 // 之前存的旧 workers.dev 地址会自动被新默认地址顶掉，不用用户手动改。
 const G_TOKEN_PROXY_DEFAULT = 'https://mmn-gmail-oauth.bit.indevs.in';
 const G_OAUTH_SCOPE = 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send';
+// v1.15.81：Google 发 token 回来的 scope 顺序不保证跟要的一样（也可能多/少空格），
+// 字符串原样比对会误判成“权限不够”。按集合比：拆空格、去重、排序再比。
+function normalizeOAuthScope(s) {
+  return [...new Set(String(s || '').split(/\s+/).filter(Boolean))].sort().join(' ');
+}
+function sameOAuthScope(a, b) {
+  return normalizeOAuthScope(a) === normalizeOAuthScope(b);
+}
 // access_token 剩余有效期小于这个值就提前刷新
 const G_TOKEN_REFRESH_MARGIN_MS = 120000;
 
@@ -470,7 +478,7 @@ async function startGmailLogin(accountId) {
     ...(refreshToken ? { refresh_token: refreshToken } : {}),
     expires_at: Date.now() + expiresIn * 1000,
     email: email || '',
-    scope: parsedScope || G_OAUTH_SCOPE,
+    scope: normalizeOAuthScope(parsedScope || G_OAUTH_SCOPE),
     updated_at: Date.now(),
   };
   await saveGmailTokens(tokens);
@@ -566,7 +574,7 @@ async function refreshGmailTokenWithCooldown(accountId, t) {
       // Worker 续发 refresh_token 时用新的，没发就沿用旧的
       refresh_token: r.refreshToken || tokens[accountId].refresh_token,
       expires_at: Date.now() + r.expiresIn * 1000,
-      scope: r.scope || tokens[accountId].scope || '',
+      scope: normalizeOAuthScope(r.scope || tokens[accountId].scope || ''),
       refreshFailAt: 0,
       updated_at: Date.now(),
     };
@@ -604,7 +612,7 @@ async function silentGmailReauth(accountId, t) {
     ...t,
     access_token: parsed.accessToken,
     expires_at: Date.now() + parsed.expiresIn * 1000,
-    scope: parsed.scope || t.scope || '',
+    scope: normalizeOAuthScope(parsed.scope || t.scope || ''),
     silentFailAt: 0,
     updated_at: Date.now(),
   };
@@ -781,7 +789,7 @@ async function isGmailScopeStale(accountId) {
   const tokens = await getGmailTokens();
   const t = tokens[accountId];
   if (!t) return true;
-  return (t.scope || '') !== G_OAUTH_SCOPE;
+  return !sameOAuthScope(t.scope || '', G_OAUTH_SCOPE);
 }
 
 // Gmail API 写操作通用：成功 {ok:true}；
@@ -789,7 +797,7 @@ async function isGmailScopeStale(accountId) {
 async function gmailApiCall(accountId, method, path, body) {
   const tok = await getValidGmailAccessToken(accountId);
   if (!tok) return { ok: false, error: 'need-login' };
-  if ((tok.scope || '') !== G_OAUTH_SCOPE) return { ok: false, error: 'need-rescope' };
+  if (!sameOAuthScope(tok.scope || '', G_OAUTH_SCOPE)) return { ok: false, error: 'need-rescope' };
   try {
     const res = await fetch(G_API_BASE + path, {
       method,
