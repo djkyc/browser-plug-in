@@ -33,10 +33,12 @@ const MS_AUTH_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/author
 const MS_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
 const MS_GRAPH_ME_URL = 'https://graph.microsoft.com/v1.0/me?$select=userPrincipalName,mail,displayName';
 const MS_GRAPH_INBOX_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox?$select=unreadItemCount';
-const MS_GRAPH_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/messages?$top=10&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$filter=isRead eq false&$orderby=receivedDateTime desc';
+// v1.15.85：不只查未读，查最近 20 封（不论已读未读），客户端留未读的 + 2 小时内新到的（见 isRecentMail）。
+// v1.15.86：/me/messages 是全部文件夹，垃圾箱的信也会查到，和垃圾箱列表重复显示两遍。改成只查 inbox 文件夹。
+const MS_GRAPH_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=20&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$orderby=receivedDateTime desc';
 // v1.15.56：垃圾邮件文件夹（includeJunk 开关开时一起查）
 const MS_GRAPH_JUNK_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail?$select=unreadItemCount';
-const MS_GRAPH_JUNK_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages?$top=10&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$filter=isRead eq false&$orderby=receivedDateTime desc';
+const MS_GRAPH_JUNK_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages?$top=20&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$orderby=receivedDateTime desc';
 const MS_OAUTH_SCOPE = 'openid profile email offline_access Mail.ReadWrite Mail.Send';
 // v1.15.81：微软发 token 回来的 scope 顺序不保证跟要的一样，字符串原样比对会误判成“权限不够”。
 // 按集合比：拆空格、去重、排序再比（跟 gmail-oauth.js 里同名函数一个逻辑，两文件各存一份）。
@@ -385,15 +387,18 @@ async function checkOutlookAccount(acc) {
     }
     const data = await res.json();
     let unread = Number.isFinite(data.unreadItemCount) ? data.unreadItemCount : 0;
-    // 最近未读邮件列表（带 Graph ID）；取不到就沿用旧列表，不影响未读数
-    let messages = acc.messages || [];
+    // 最近收到的邮件列表（带 Graph ID）；取不到就沿用旧列表，不影响未读数
+    // v1.15.88：只留 24 小时内新到的（最新收到），不跟旧列表合并。
+    const dismissed = new Set(Array.isArray(acc.dismissed) ? acc.dismissed : []);
+    let fresh = [];
     try {
       const mres = await fetch(MS_GRAPH_MESSAGES_URL, {
         headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
       });
       if (mres.ok) {
         const mdata = await mres.json();
-        messages = parseOutlookMessages(mdata);
+        // v1.15.88：只留 24 小时内新到的（最新收到）；以前的未读不进列表。
+        fresh = parseOutlookMessages(mdata).filter(m => isRecentMail(m.time));
       } else {
         await diagLog(`[${who}] Graph 取邮件列表：HTTP ${mres.status}，沿用旧列表`);
       }
@@ -417,10 +422,10 @@ async function checkOutlookAccount(acc) {
         });
         if (jmres.ok) {
           const jmdata = await jmres.json();
-          const junkMsgs = parseOutlookMessages(jmdata, 'junk');
-          messages = [...messages, ...junkMsgs]
-            .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
-            .slice(0, 10);
+          // v1.15.85：同上，留未读的 + 2 小时内新到的
+          const junkMsgs = parseOutlookMessages(jmdata, 'junk').filter(m => isRecentMail(m.time));
+          fresh = dedupeMessages([...fresh, ...junkMsgs])
+            .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
         } else {
           await diagLog(`[${who}] Graph 取垃圾邮件列表：HTTP ${jmres.status}，只用收件箱列表`);
         }
@@ -428,7 +433,11 @@ async function checkOutlookAccount(acc) {
         await diagLog(`[${who}] Graph 取垃圾邮件列表异常：${String((e && e.message) || e)}，只用收件箱列表`);
       }
     }
-    return { ...acc, unread, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
+    const messages = dedupeMessages(fresh).filter(m => !dismissed.has(m.id))
+      .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
+      .slice(0, 10);
+    // v1.15.89：计数 = 列表里还没处理的新信数，不认服务器未读数（机器人取信标已读后服务器数是 0）。
+    return { ...acc, unread: messages.length, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
   } catch (e) {
     await diagLog(`[${who}] Graph 查未读异常：${String((e && e.message) || e)}`);
     return { ...acc, status: 'error:' + ((e && e.message) || 'fetch-failed'), lastCheck: Date.now() };
@@ -440,7 +449,7 @@ async function checkOutlookAccount(acc) {
 // folder 为 'junk' 时打上标记，弹窗里显示“垃圾”徽标
 function parseOutlookMessages(data, folder) {
   const list = Array.isArray(data && data.value) ? data.value : [];
-  return list.slice(0, 10).map(m => {
+  return list.slice(0, 20).map(m => {
     const from = m.from && m.from.emailAddress;
     const sender = (from && (from.name || from.address)) || '';
     const subject = m.subject || '';
@@ -454,6 +463,8 @@ function parseOutlookMessages(data, folder) {
       time: m.receivedDateTime || '',
       code: extractCode(subject + ' ' + summary),
       folder: folder || '',
+      // v1.15.85：isRead 为 false 才是未读；已被机器人标已读但 2 小时内新到的照样显示。
+      unread: !m.isRead,
     };
   });
 }

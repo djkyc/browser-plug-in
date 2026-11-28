@@ -33,6 +33,26 @@ const DEFAULT_SETTINGS = {
   includeJunk: true,       // v1.15.57：同时检查垃圾邮件（Outlook 垃圾邮件文件夹、Gmail 垃圾邮件；默认开着，直接能收到垃圾箱里的邮件）
 };
 
+// v1.15.85：新到的信就算已被别的客户端（TG 机器人）标已读，插件也照样显示。
+// 机器人用 IMAP IDLE 即时取信并标已读，插件 15 秒轮询永远抢不过它——只查未读就永远看不到。
+// 改法：列表查最近 20 封（不论已读未读），客户端留“未读的”+“2 小时内新到的”；未读数徽标还是真实未读数。
+const RECENT_MAIL_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 小时（v1.15.86：2 小时太短，不点开就消失，改成留一整天）
+function isRecentMail(time) {
+  const t = new Date(time || 0).getTime();
+  return Number.isFinite(t) && (Date.now() - t) < RECENT_MAIL_WINDOW_MS;
+}
+// v1.15.86：收件箱+垃圾箱合并时按 ID 去重。同一封信两边都查到时只留一条，
+// 有 folder 标记（垃圾邮件）的那条优先，徽标才对。
+function dedupeMessages(list) {
+  const seen = new Map();
+  for (const m of (Array.isArray(list) ? list : [])) {
+    if (!m || !m.id) continue;
+    const prev = seen.get(m.id);
+    if (!prev || (!prev.folder && m.folder)) seen.set(m.id, m);
+  }
+  return [...seen.values()];
+}
+
 // v1.15.45：自动检查更新——读仓库里 multi-mail-notifier/version.json。
 // 注意：扩展不能自己给自己换代码（Chrome 不允许），所以查到新版只能弹通知 + 给下载链接，
 // 用户点链接去 GitHub 下新 zip、覆盖安装后刷新。想完全静默自动更新，只能上架 Chrome 应用商店。
@@ -518,8 +538,9 @@ async function checkProtonAccount(acc) {
         if (n) {
           totalUnread += n;
           unreadConvCount++;
-          if (unreadConvs.length < 10) unreadConvs.push(c);
         }
+        // v1.15.88：列表只收 24 小时内新到的（最新收到）；以前的未读不收进列表，只算进未读数。
+        if (isRecentMail(c.Time ? c.Time * 1000 : 0) && unreadConvs.length < 10) unreadConvs.push(c);
       }
       pages++;
       if (list.length === 0) break; // 没更多了
@@ -527,7 +548,9 @@ async function checkProtonAccount(acc) {
     }
     // v1.15.0：把未读会话列出来（发件人/标题/链接），弹窗里能点、能标已读/归档/删除；
     // 正文是端到端加密的，后台解不开，点邮件还是打开网页版看。
-    let messages = unreadConvs.map((c) => {
+    const dismissed = new Set(Array.isArray(acc.dismissed) ? acc.dismissed : []);
+    // v1.15.88：fresh 是这次新查到的最新收到（24 小时内），列表直接用 fresh，不跟旧列表合并。
+    let fresh = unreadConvs.map((c) => {
       const sender = (c.Senders && c.Senders[0]) || {};
       return {
         id: c.ID,
@@ -540,6 +563,8 @@ async function checkProtonAccount(acc) {
         code: extractCode(c.Subject || ''),
         // v1.15.60：补 time（之前没有，弹窗按时间排序会把它沉到底，时间也显示不出来）
         time: c.Time ? new Date(c.Time * 1000).toISOString() : '',
+        // v1.15.88：补 unread（供 dropMessage 判断减不减计数）
+        unread: (c.NumUnread || 0) > 0,
       };
     });
     // v1.15.56：includeJunk 开时，连垃圾邮件（LabelID=4）一起查（未读数加上，列表跟在收件箱后面取前 10，带 spam 标记）
@@ -561,8 +586,9 @@ async function checkProtonAccount(acc) {
             if (n) {
               totalUnread += n;
               unreadConvCount++;
-              if (spamConvs.length < 10) spamConvs.push(c);
             }
+            // v1.15.88：同上，只收 24 小时内新到的。
+            if (isRecentMail(c.Time ? c.Time * 1000 : 0) && spamConvs.length < 10) spamConvs.push(c);
           }
           spamPages++;
           if (slist.length === 0) break;
@@ -582,18 +608,24 @@ async function checkProtonAccount(acc) {
             code: extractCode(c.Subject || ''),
             // v1.15.60：补 time（和收件箱一样，不然排序沉底）
             time: c.Time ? new Date(c.Time * 1000).toISOString() : '',
+            // v1.15.88：补 unread（供 dropMessage 判断减不减计数）
+            unread: (c.NumUnread || 0) > 0,
           };
         });
-        messages = [...messages, ...spamMsgs]
-          .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
-          .slice(0, 10);
+        fresh = dedupeMessages([...fresh, ...spamMsgs])
+          .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
       } catch (e) {
         await diagLog(`[${acc.label || 'Proton ' + idx}] 垃圾邮件查异常：${String(e?.message || e)}，只用收件箱`);
       }
     }
     const capped = pages >= MAX_PAGES && fetched < totalConvs;
     await diagLog(`[${acc.label || 'Proton ' + idx}] 后台查：HTTP 200，未读 ${totalUnread} 封（${unreadConvCount} 个未读会话，翻了 ${pages} 页${capped ? '，会话太多只数了前 ' + fetched + ' 个' : ''}）`);
-    return { ...acc, unread: totalUnread, messages, status: 'ok', lastCheck: Date.now() };
+    // v1.15.88：列表只留最新收到（24 小时内），不跟旧列表合并；处理过的（dismissed）不再加回来。
+    const messages = dedupeMessages(fresh).filter(m => !dismissed.has(m.id))
+      .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
+      .slice(0, 10);
+    // v1.15.89：计数 = 列表里还没处理的新信数，不认服务器未读数（机器人取信标已读后服务器数是 0）。
+    return { ...acc, unread: messages.length, messages, status: 'ok', lastCheck: Date.now() };
   } catch (e) {
     await diagLog(`[${acc.label || 'Proton ' + idx}] 后台查异常：${String(e?.message || e)}`);
     return { ...acc, status: 'error:' + (e?.message || 'fetch-failed'), lastCheck: Date.now() };
@@ -1120,7 +1152,10 @@ async function dropMessageFromStoredAccount(accountId, messageId) {
   const before = (acc.messages || []).length;
   const next = (acc.messages || []).filter(m => m.id !== messageId);
   if (next.length === before) return null;
-  const updated = { ...acc, messages: next, unread: Math.max(0, (acc.unread || 0) - 1) };
+  // v1.15.87：动作过的信记进 dismissed，下次检查就算它还在 24 小时内也不再加回来。
+  const dismissed = [...(Array.isArray(acc.dismissed) ? acc.dismissed : []), messageId].filter((v, i, a) => a.indexOf(v) === i).slice(-200);
+  // v1.15.89：计数 = 列表长度，从列表拿掉一封计数就减 1（不认服务器未读数，机器人已标已读）。
+  const updated = { ...acc, messages: next, unread: Math.max(0, (acc.unread || 0) - 1), dismissed };
   const merged = await saveAccountsMerged(accounts.map(a => a.id === acc.id ? updated : a));
   await updateBadge(merged);
   return merged;

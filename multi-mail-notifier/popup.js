@@ -391,13 +391,21 @@ function fmtTime(t) {
 // 收起：已经标已读的就把这行从列表拿掉（读完自动消失），没标上的留着。
 function toggleReader(msgDiv, acc, m) {
   const old = msgDiv.querySelector('.msg-body');
-  if (old) { closeReader(msgDiv, acc); return; }
+  if (old) { closeReader(msgDiv, acc, m); return; }
   openReader(msgDiv, acc, m);
 }
-function closeReader(msgDiv, acc) {
+// v1.15.88：点开看完收起，按“标已读”走——服务器标已读、计数减 1、列表拿掉、记进 dismissed。
+// 计数只在用户动作后掉（点已读/删除/归档/点开邮件），只开插件不掉数。
+// 读的时候不标，免得翻译还没看完它先走了（v1.15.58 的教训）。
+function closeReader(msgDiv, acc, m) {
   const bodyEl = msgDiv.querySelector('.msg-body');
   if (bodyEl) bodyEl.remove();
   msgDiv._readerOpen = false;
+  if (m && m.id) {
+    const actionType = acc.provider === 'gmail' ? 'mmn-gmail-action' : acc.provider === 'outlook' ? 'mmn-outlook-action' : 'mmn-proton-action';
+    chrome.runtime.sendMessage({ type: actionType, accountId: acc.id, messageId: m.id, action: 'read' }).catch(() => {});
+    msgDiv.remove();
+  }
   // v1.15.58：收起只折叠正文，邮件留在列表里——只有点“标已读/删除/归档”才拿掉它
   // v1.15.59：读的时候攒下的刷新，收起后补刷一次
   if (pendingRefresh) { pendingRefresh = false; load(); }
@@ -481,7 +489,7 @@ async function openReader(msgDiv, acc, m) {
   tr.onclick = (e) => { e.stopPropagation(); toggleTranslate(bodyEl, bodyText, tr, res.text || ''); };
   const collapse = document.createElement('a');
   collapse.textContent = '收起 ∧';
-  collapse.onclick = (e) => { e.stopPropagation(); closeReader(msgDiv, acc); };
+  collapse.onclick = (e) => { e.stopPropagation(); closeReader(msgDiv, acc, m); };
   tools.append(web, tr, collapse);
   bodyEl.append(tools);
   // v1.15.58：点开只看正文，不再自动标已读——以前读完就标已读，30 秒一刷新邮件就从未读列表里没了，
