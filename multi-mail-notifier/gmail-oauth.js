@@ -692,7 +692,9 @@ async function checkGmailAccount(acc) {
         }
       } catch { /* SPAM 标签取不到就不算，不影响收件箱 */ }
       try {
-        const lres = await fetch(G_API_BASE + '/users/me/messages?q=' + encodeURIComponent('is:unread in:spam') + '&maxResults=10', {
+        // v1.15.83：Gmail API 默认静默排除 SPAM/TRASH（includeSpamTrash 默认 false），
+        // 哪怕 q 里写了 in:spam 也会被丢掉、不报错——必须显式加 includeSpamTrash=true。
+        const lres = await fetch(G_API_BASE + '/users/me/messages?q=' + encodeURIComponent('is:unread in:spam') + '&includeSpamTrash=true&maxResults=10', {
           headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
         });
         if (lres.ok) {

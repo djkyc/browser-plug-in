@@ -575,7 +575,7 @@ document.getElementById('discoverOutlookBtn').onclick = async () => {
 
 document.getElementById('saveBtn').onclick = async () => {
   const settings = {
-    intervalMinutes: Math.max(0.5, parseFloat(document.getElementById('interval').value) || 0.5),
+    intervalMinutes: Math.max(0.1, parseFloat(document.getElementById('interval').value) || 0.25),
     desktopNotif: document.getElementById('desktopNotif').checked,
     autoUpdateCheck: document.getElementById('autoUpdateCheck').checked,
     includeJunk: document.getElementById('includeJunk').checked,

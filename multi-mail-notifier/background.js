@@ -21,7 +21,7 @@
 importScripts('outlook-oauth.js', 'gmail-oauth.js', 'bcrypt.min.js', 'proton-srp.js');
 
 const DEFAULT_SETTINGS = {
-  intervalMinutes: 0.5,    // 轮询间隔（分钟），0.5 = 30 秒；Chrome 重复闹钟最小 1 分钟，<1 分钟时用一次性闹钟连锁
+  intervalMinutes: 0.25,   // 轮询间隔（分钟），0.25 = 15 秒；Chrome 重复闹钟最小 1 分钟，<1 分钟时用一次性闹钟连锁
   desktopNotif: true,      // 新邮件桌面通知
   sound: false,            // 新邮件提示音（用 WebAudio 哔一声，不用音频文件）
   onlyImportant: false,    // 只提醒含验证码的邮件（Peekat 思路：安静，只报重要的）
@@ -584,7 +584,9 @@ async function checkProtonAccount(acc) {
             time: c.Time ? new Date(c.Time * 1000).toISOString() : '',
           };
         });
-        messages = [...messages, ...spamMsgs].slice(0, 10);
+        messages = [...messages, ...spamMsgs]
+          .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
+          .slice(0, 10);
       } catch (e) {
         await diagLog(`[${acc.label || 'Proton ' + idx}] 垃圾邮件查异常：${String(e?.message || e)}，只用收件箱`);
       }
@@ -778,21 +780,21 @@ async function checkAll({ discover = false } = {}) {
     if (found.length) accounts = [...accounts, ...found];
   }
 
-  const next = [];
-  for (const acc of accounts) {
-    if (acc.enabled === false) { next.push(acc); continue; }
-    if (acc.provider === 'gmail') {
-      next.push(await checkGmailAccount(acc));
-    } else if (acc.provider === 'outlook') {
-      next.push(await checkOutlookAccount(acc)); // Graph API，见 outlook-oauth.js
-    } else if (acc.provider === 'proton') {
-      next.push(await checkProtonAccount(acc));
-    } else if (acc.provider === 'custom') {
-      continue; // v1.7：已不要自定义邮箱，这类账号不再检查
-    } else {
-      next.push(acc);
+  // v1.15.84：11 个账号并行查（之前串行，一个等一个，整轮要十几秒）。
+  // Promise.all 保序，单个账号抛错只影响自己（回落旧状态），不拖垮整轮。
+  const next = (await Promise.all(accounts.map(async (acc) => {
+    if (acc.enabled === false) return acc;
+    try {
+      if (acc.provider === 'gmail') return await checkGmailAccount(acc);
+      if (acc.provider === 'outlook') return await checkOutlookAccount(acc); // Graph API，见 outlook-oauth.js
+      if (acc.provider === 'proton') return await checkProtonAccount(acc);
+      if (acc.provider === 'custom') return null; // v1.7：已不要自定义邮箱，这类账号不再检查
+    } catch (e) {
+      await diagLog(`[${acc.email || acc.id}] 检查异常：${String((e && e.message) || e)}，沿用旧状态`);
+      return acc;
     }
-  }
+    return acc;
+  }))).filter((a) => a !== null);
 
   const merged = await saveAccountsMerged(next);
   await updateBadge(merged);
@@ -845,10 +847,11 @@ async function migrateGooglePublicToOwn() {
 }
 // v1.15.53：检查间隔改成 30 秒（0.5 分钟）。Chrome 重复闹钟最小 1 分钟，
 // 所以 <1 分钟时用一次性闹钟连锁：响一次就再设下一个 delayInMinutes=0.5 的。
+// v1.15.84：默认改成 15 秒（0.25 分钟），验证码来得更快；设置页最小可设 6 秒（0.1 分钟）。
 let checkRunning = false;
 async function scheduleCheckAlarm() {
   const settings = await getSettings();
-  const mins = settings.intervalMinutes || 0.5;
+  const mins = settings.intervalMinutes || 0.25;
   await chrome.alarms.clear('mmn-check');
   if (mins >= 1) chrome.alarms.create('mmn-check', { periodInMinutes: mins });
   else chrome.alarms.create('mmn-check', { delayInMinutes: mins });
@@ -863,6 +866,16 @@ async function migrateIntervalToHalfMinute() {
     await chrome.storage.local.set({ settings: data.settings });
   }
 }
+// 一次性迁移：30 秒默认改成 15 秒（只跑一次；用户后来在设置页改回去不会被再改回去）
+async function migrateIntervalToQuarterMinute() {
+  const data = await chrome.storage.local.get(['settings', 'intervalMigratedTo025']);
+  if (data.intervalMigratedTo025) return;
+  await chrome.storage.local.set({ intervalMigratedTo025: true });
+  if (data.settings && data.settings.intervalMinutes === 0.5) {
+    data.settings.intervalMinutes = 0.25;
+    await chrome.storage.local.set({ settings: data.settings });
+  }
+}
 chrome.runtime.onInstalled.addListener(async () => {
   await migrateMsThunderbirdToOwn();
   await migrateGooglePublicToOwn();
@@ -870,6 +883,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await dropLegacyOutlookData();
   await dedupeOutlookAccounts(await getAccounts());
   await migrateIntervalToHalfMinute();
+  await migrateIntervalToQuarterMinute();
   const settings = await getSettings();
   await chrome.storage.local.set({ settings });
   await scheduleCheckAlarm();
@@ -885,6 +899,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await dropLegacyOutlookData();
   await dedupeOutlookAccounts(await getAccounts());
   await migrateIntervalToHalfMinute();
+  await migrateIntervalToQuarterMinute();
   const settings = await getSettings();
   await scheduleCheckAlarm();
   await setupUpdateAlarm();
