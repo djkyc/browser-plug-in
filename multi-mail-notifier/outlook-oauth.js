@@ -19,8 +19,8 @@
  * 3. 每个 Outlook 账号单独点“登录”：chrome.identity.launchWebAuthFlow 打开微软登录页，
  *    prompt=select_account 强制选号，避免 Windows 静默 SSO 直接登进最后一个号。
  *    拿 code 换 access_token + refresh_token，按账号存本地。
- * 4. 未读数走 Graph API：GET /me/mailFolders/inbox?$select=unreadItemCount；
- *    最近未读邮件列表走 GET /me/messages（带 Graph ID，供标已读/归档/删除/回复）。
+ * 4. v1.15.89 起计数=列表里还没处理的新信数，不再调文件夹计数接口（机器人取信标已读后服务器数是 0）；
+ *    最近收到的邮件列表走 GET /me/mailFolders/inbox/messages（带 Graph ID，供标已读/归档/删除/回复）。
  *    access_token 快过期时用 refresh_token 自动换；换不到就标“需重新登录”。
  * 5. v1.12.0：回邮件/标已读/归档/删除/写邮件走 Graph（Mail.ReadWrite + Mail.Send）。
  *    旧 token 只有 Mail.Read 时，未读照常查，但操作会提示重新登录授权一次。
@@ -32,12 +32,10 @@
 const MS_AUTH_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
 const MS_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
 const MS_GRAPH_ME_URL = 'https://graph.microsoft.com/v1.0/me?$select=userPrincipalName,mail,displayName';
-const MS_GRAPH_INBOX_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox?$select=unreadItemCount';
 // v1.15.85：不只查未读，查最近 20 封（不论已读未读），客户端留未读的 + 2 小时内新到的（见 isRecentMail）。
 // v1.15.86：/me/messages 是全部文件夹，垃圾箱的信也会查到，和垃圾箱列表重复显示两遍。改成只查 inbox 文件夹。
 const MS_GRAPH_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=20&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$orderby=receivedDateTime desc';
 // v1.15.56：垃圾邮件文件夹（includeJunk 开关开时一起查）
-const MS_GRAPH_JUNK_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail?$select=unreadItemCount';
 const MS_GRAPH_JUNK_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages?$top=20&$select=id,from,subject,bodyPreview,receivedDateTime,isRead,webLink&$orderby=receivedDateTime desc';
 const MS_OAUTH_SCOPE = 'openid profile email offline_access Mail.ReadWrite Mail.Send';
 // v1.15.81：微软发 token 回来的 scope 顺序不保证跟要的一样，字符串原样比对会误判成“权限不够”。
@@ -372,21 +370,7 @@ async function checkOutlookAccount(acc) {
   // 只在第一次发现 scope 旧了的时候记一行，别每分钟刷日志
   if (needsRescope && !acc.needsRescope) await diagLog(`[${who}] token 还是旧权限（只有读），未读照常查；回邮件/标已读要重新登录授权一次`);
   try {
-    const res = await fetch(MS_GRAPH_INBOX_URL, {
-      headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
-    });
-    if (res.status === 401) {
-      // 刚换过的 token 还 401：清掉 access_token，下次重新登录
-      await clearOutlookAccessToken(acc.id);
-      await diagLog(`[${who}] Graph 查未读：HTTP 401，token 失效，点“登录”重新登录`);
-      return { ...acc, status: 'need-login', unread: acc.unread || 0, lastCheck: Date.now() };
-    }
-    if (!res.ok) {
-      await diagLog(`[${who}] Graph 查未读：HTTP ${res.status}`);
-      return { ...acc, status: 'error:' + res.status, unread: acc.unread || 0, lastCheck: Date.now() };
-    }
-    const data = await res.json();
-    let unread = Number.isFinite(data.unreadItemCount) ? data.unreadItemCount : 0;
+    // v1.15.90：不再调文件夹计数接口（计数=列表长度，服务器数已不用）；401 在取列表这步判。
     // 最近收到的邮件列表（带 Graph ID）；取不到就沿用旧列表，不影响未读数
     // v1.15.88：只留 24 小时内新到的（最新收到），不跟旧列表合并。
     const dismissed = new Set(Array.isArray(acc.dismissed) ? acc.dismissed : []);
@@ -395,6 +379,12 @@ async function checkOutlookAccount(acc) {
       const mres = await fetch(MS_GRAPH_MESSAGES_URL, {
         headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
       });
+      if (mres.status === 401) {
+        // 刚换过的 token 还 401：清掉 access_token，下次重新登录
+        await clearOutlookAccessToken(acc.id);
+        await diagLog(`[${who}] Graph 取邮件列表：HTTP 401，token 失效，点“登录”重新登录`);
+        return { ...acc, status: 'need-login', unread: acc.unread || 0, lastCheck: Date.now() };
+      }
       if (mres.ok) {
         const mdata = await mres.json();
         // v1.15.88：只留 24 小时内新到的（最新收到）；以前的未读不进列表。
@@ -407,15 +397,7 @@ async function checkOutlookAccount(acc) {
     }
     // v1.15.56：includeJunk 开时，连垃圾邮件文件夹一起查（未读数加上，列表合并按时间倒序取前 10，带 junk 标记）
     if ((await getSettings()).includeJunk) {
-      try {
-        const jres = await fetch(MS_GRAPH_JUNK_URL, {
-          headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
-        });
-        if (jres.ok) {
-          const jdata = await jres.json();
-          unread += Number.isFinite(jdata.unreadItemCount) ? jdata.unreadItemCount : 0;
-        }
-      } catch { /* 垃圾文件夹取不到就不算，不影响收件箱 */ }
+      // v1.15.90：不再调垃圾文件夹计数接口（计数=列表长度，服务器数已不用）。
       try {
         const jmres = await fetch(MS_GRAPH_JUNK_MESSAGES_URL, {
           headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
@@ -436,8 +418,11 @@ async function checkOutlookAccount(acc) {
     const messages = dedupeMessages(fresh).filter(m => !dismissed.has(m.id))
       .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
       .slice(0, 10);
+    // v1.15.91：把旧列表里已打开的标记带回来（打开过的留列表里变灰）；计数只算没打开的。
+    const openedIds = new Set((acc.messages || []).filter(m => m.opened).map(m => m.id));
+    for (const m of messages) if (openedIds.has(m.id)) m.opened = true;
     // v1.15.89：计数 = 列表里还没处理的新信数，不认服务器未读数（机器人取信标已读后服务器数是 0）。
-    return { ...acc, unread: messages.length, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
+    return { ...acc, unread: messages.filter(m => !m.opened).length, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
   } catch (e) {
     await diagLog(`[${who}] Graph 查未读异常：${String((e && e.message) || e)}`);
     return { ...acc, status: 'error:' + ((e && e.message) || 'fetch-failed'), lastCheck: Date.now() };

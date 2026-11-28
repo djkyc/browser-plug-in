@@ -173,7 +173,8 @@ document.getElementById('list').addEventListener('mousemove', (e) => {
 // v1.15.27：showAcc 时左上角带个小账号标（全部视图里认得出是哪号的；单号视图不用，上面有邮箱头）
 function buildMsgEl(acc, m, showAcc) {
   const msg = document.createElement('div');
-  msg.className = 'msg';
+  // v1.15.91：打开过的变灰（msg-opened），没打开过的保持加粗，一眼分得出。
+  msg.className = 'msg' + (m.opened ? ' msg-opened' : '');
   msg.dataset.accId = acc.id;
   // v1.14.0：点邮件在弹窗里读全文（跟 Peekat 一样），读完自动标已读、收起就消失；
   // Proton 没接正文接口，点它还是打开网页版
@@ -222,10 +223,14 @@ function buildMsgEl(acc, m, showAcc) {
       b.onclick = async (e) => {
         e.stopPropagation();
         b.disabled = true;
-        // v1.15.10：点下去立刻把这行拿掉、计数减 1，不用等后台 API + 重查回来才消失；
+        // v1.15.91：标已读只变灰留列表里（计数减 1），归档/删除才把这行拿掉；
         // 后台失败会重新加载，把这封恢复回来再显示错误。
-        msg.remove();
-        decCounts(msg);
+        if (action === 'read') {
+          if (!m.opened) { m.opened = true; msg.classList.add('msg-opened'); decCounts(msg); }
+        } else {
+          msg.remove();
+          decCounts(msg);
+        }
         const res = await chrome.runtime.sendMessage({ type: actionType, accountId: acc.id, messageId: m.id, action }).catch(() => null);
         if (!res || res.ok !== true) { await load(); setActionStatus(acc.id, actionErrorText(res), true); }
         else await load();
@@ -394,8 +399,8 @@ function toggleReader(msgDiv, acc, m) {
   if (old) { closeReader(msgDiv, acc, m); return; }
   openReader(msgDiv, acc, m);
 }
-// v1.15.88：点开看完收起，按“标已读”走——服务器标已读、计数减 1、列表拿掉、记进 dismissed。
-// 计数只在用户动作后掉（点已读/删除/归档/点开邮件），只开插件不掉数。
+// v1.15.91：点开看完收起，按“标已读”走——服务器标已读、计数减 1，这封留列表里变灰（不再拿掉），
+// 没打开过的保持加粗，一眼分得出。计数只在用户动作后掉，只开插件不掉数。
 // 读的时候不标，免得翻译还没看完它先走了（v1.15.58 的教训）。
 function closeReader(msgDiv, acc, m) {
   const bodyEl = msgDiv.querySelector('.msg-body');
@@ -404,7 +409,7 @@ function closeReader(msgDiv, acc, m) {
   if (m && m.id) {
     const actionType = acc.provider === 'gmail' ? 'mmn-gmail-action' : acc.provider === 'outlook' ? 'mmn-outlook-action' : 'mmn-proton-action';
     chrome.runtime.sendMessage({ type: actionType, accountId: acc.id, messageId: m.id, action: 'read' }).catch(() => {});
-    msgDiv.remove();
+    if (!m.opened) { m.opened = true; msgDiv.classList.add('msg-opened'); decCounts(msgDiv); }
   }
   // v1.15.58：收起只折叠正文，邮件留在列表里——只有点“标已读/删除/归档”才拿掉它
   // v1.15.59：读的时候攒下的刷新，收起后补刷一次

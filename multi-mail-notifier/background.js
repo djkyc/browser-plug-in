@@ -21,7 +21,7 @@
 importScripts('outlook-oauth.js', 'gmail-oauth.js', 'bcrypt.min.js', 'proton-srp.js');
 
 const DEFAULT_SETTINGS = {
-  intervalMinutes: 0.25,   // 轮询间隔（分钟），0.25 = 15 秒；Chrome 重复闹钟最小 1 分钟，<1 分钟时用一次性闹钟连锁
+  intervalMinutes: 0.1,   // v1.15.90：轮询间隔（分钟），0.1 = 6 秒（设置页最小值）；Chrome 重复闹钟最小 1 分钟，<1 分钟时用一次性闹钟连锁
   desktopNotif: true,      // 新邮件桌面通知
   sound: false,            // 新邮件提示音（用 WebAudio 哔一声，不用音频文件）
   onlyImportant: false,    // 只提醒含验证码的邮件（Peekat 思路：安静，只报重要的）
@@ -329,10 +329,23 @@ async function saveAccountsMerged(next) {
   // 用户显式改回“自动”时存的是 null，那时就用 null（不补）。
   const merged = next.filter(a => currentIds.has(a.id)).map(a => {
     const cur = currentById.get(a.id);
+    let out = a;
     if (cur && a.slotOverride === undefined && cur.slotOverride !== undefined) {
-      return { ...a, slotOverride: cur.slotOverride };
+      out = { ...out, slotOverride: cur.slotOverride };
     }
-    return a;
+    // v1.15.92：轮查读的是开始时的旧快照，写回时会把这轮里刚标已打开/刚归档删除的动作刷掉
+    // （用户点开邮件后几秒变回亮的、计数不掉，就是这个原因）。
+    // 写回时以当前存储为准：已打开的标记、dismissed 集合都从当前存储补回来，再重算计数。
+    if (cur && Array.isArray(out.messages)) {
+      const openedIds = new Set((cur.messages || []).filter(m => m.opened).map(m => m.id));
+      const curDismissed = Array.isArray(cur.dismissed) ? cur.dismissed : [];
+      const outDismissed = Array.isArray(out.dismissed) ? out.dismissed : [];
+      const dismissed = [...new Set([...outDismissed, ...curDismissed])].slice(-200);
+      let msgs = out.messages.filter(m => !dismissed.includes(m.id));
+      if (openedIds.size) msgs = msgs.map(m => openedIds.has(m.id) ? { ...m, opened: true } : m);
+      out = { ...out, messages: msgs, unread: msgs.filter(m => !m.opened).length, dismissed };
+    }
+    return out;
   });
   for (const a of current) if (!merged.some(x => x.id === a.id)) merged.push(a);
   await saveAccounts(merged);
@@ -545,6 +558,8 @@ async function checkProtonAccount(acc) {
       pages++;
       if (list.length === 0) break; // 没更多了
       if (fetched >= totalConvs) break; // 已盖过全部会话
+      // v1.15.90：凑够 10 封最新收到就停，不再翻页数总数（计数=列表长度，总数已不用）。
+      if (unreadConvs.length >= 10) break;
     }
     // v1.15.0：把未读会话列出来（发件人/标题/链接），弹窗里能点、能标已读/归档/删除；
     // 正文是端到端加密的，后台解不开，点邮件还是打开网页版看。
@@ -593,6 +608,8 @@ async function checkProtonAccount(acc) {
           spamPages++;
           if (slist.length === 0) break;
           if (spamFetched >= spamTotal) break;
+          // v1.15.90：凑够 10 封最新收到就停，不再翻页数总数。
+          if (spamConvs.length >= 10) break;
         }
         const spamMsgs = spamConvs.map((c) => {
           const sender = (c.Senders && c.Senders[0]) || {};
@@ -624,8 +641,11 @@ async function checkProtonAccount(acc) {
     const messages = dedupeMessages(fresh).filter(m => !dismissed.has(m.id))
       .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
       .slice(0, 10);
+    // v1.15.91：把旧列表里已打开的标记带回来（打开过的留列表里变灰）；计数只算没打开的。
+    const openedIds = new Set((acc.messages || []).filter(m => m.opened).map(m => m.id));
+    for (const m of messages) if (openedIds.has(m.id)) m.opened = true;
     // v1.15.89：计数 = 列表里还没处理的新信数，不认服务器未读数（机器人取信标已读后服务器数是 0）。
-    return { ...acc, unread: messages.length, messages, status: 'ok', lastCheck: Date.now() };
+    return { ...acc, unread: messages.filter(m => !m.opened).length, messages, status: 'ok', lastCheck: Date.now() };
   } catch (e) {
     await diagLog(`[${acc.label || 'Proton ' + idx}] 后台查异常：${String(e?.message || e)}`);
     return { ...acc, status: 'error:' + (e?.message || 'fetch-failed'), lastCheck: Date.now() };
@@ -898,6 +918,16 @@ async function migrateIntervalToHalfMinute() {
     await chrome.storage.local.set({ settings: data.settings });
   }
 }
+// 一次性迁移：15 秒默认改成 6 秒（只跑一次；用户后来在设置页改回去不会被再改回去）
+async function migrateIntervalToTenthMinute() {
+  const data = await chrome.storage.local.get(['settings', 'intervalMigratedTo01']);
+  if (data.intervalMigratedTo01) return;
+  await chrome.storage.local.set({ intervalMigratedTo01: true });
+  if (data.settings && data.settings.intervalMinutes === 0.25) {
+    data.settings.intervalMinutes = 0.1;
+    await chrome.storage.local.set({ settings: data.settings });
+  }
+}
 // 一次性迁移：30 秒默认改成 15 秒（只跑一次；用户后来在设置页改回去不会被再改回去）
 async function migrateIntervalToQuarterMinute() {
   const data = await chrome.storage.local.get(['settings', 'intervalMigratedTo025']);
@@ -916,6 +946,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await dedupeOutlookAccounts(await getAccounts());
   await migrateIntervalToHalfMinute();
   await migrateIntervalToQuarterMinute();
+  await migrateIntervalToTenthMinute();
   const settings = await getSettings();
   await chrome.storage.local.set({ settings });
   await scheduleCheckAlarm();
@@ -932,6 +963,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await dedupeOutlookAccounts(await getAccounts());
   await migrateIntervalToHalfMinute();
   await migrateIntervalToQuarterMinute();
+  await migrateIntervalToTenthMinute();
   const settings = await getSettings();
   await scheduleCheckAlarm();
   await setupUpdateAlarm();
@@ -1154,8 +1186,25 @@ async function dropMessageFromStoredAccount(accountId, messageId) {
   if (next.length === before) return null;
   // v1.15.87：动作过的信记进 dismissed，下次检查就算它还在 24 小时内也不再加回来。
   const dismissed = [...(Array.isArray(acc.dismissed) ? acc.dismissed : []), messageId].filter((v, i, a) => a.indexOf(v) === i).slice(-200);
-  // v1.15.89：计数 = 列表长度，从列表拿掉一封计数就减 1（不认服务器未读数，机器人已标已读）。
-  const updated = { ...acc, messages: next, unread: Math.max(0, (acc.unread || 0) - 1), dismissed };
+  // v1.15.91：计数 = 列表里没打开的封数（打开过的变灰留着，不算数）。
+  const updated = { ...acc, messages: next, unread: next.filter(m => !m.opened).length, dismissed };
+  const merged = await saveAccountsMerged(accounts.map(a => a.id === acc.id ? updated : a));
+  await updateBadge(merged);
+  return merged;
+}
+
+// v1.15.91：点开看过 / 点“标已读”后，这封留在列表里但标成已打开（变灰），计数只算没打开的。
+// 不进 dismissed（还在 24 小时内、还在列表里），下次检查从旧列表把 opened 标记带回来。
+async function markMessageOpenedInStoredAccount(accountId, messageId) {
+  const accounts = await getAccounts();
+  const acc = accounts.find(a => a.id === accountId);
+  if (!acc) return null;
+  const msgs = acc.messages || [];
+  const target = msgs.find(m => m.id === messageId);
+  if (!target || target.opened) return null;
+  const next = msgs.map(m => m.id === messageId ? { ...m, opened: true } : m);
+  const unread = next.filter(m => !m.opened).length;
+  const updated = { ...acc, messages: next, unread };
   const merged = await saveAccountsMerged(accounts.map(a => a.id === acc.id ? updated : a));
   await updateBadge(merged);
   return merged;
@@ -1172,7 +1221,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // v1.14.0 安静标已读（点开邮件时自动标已读）：不重查、不改 badge，
     // 免得正读着弹窗列表被刷新掉；弹窗自己维护计数，下次定时检查再对齐
     if (msg.quiet) { sendResponse({ ok: true }); return; }
-    await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
+    // v1.15.91：标已读只标成已打开（留列表里变灰），归档/删除才从列表拿掉。
+    if (msg.action === 'read') await markMessageOpenedInStoredAccount(msg.accountId, msg.messageId);
+    else await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
     sendResponse({ ok: true });
   })();
   return true;
@@ -1333,7 +1384,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // v1.14.0 安静标已读（点开邮件时自动标已读）：不重查、不改 badge，
     // 免得正读着弹窗列表被刷新掉；弹窗自己维护计数，下次定时检查再对齐
     if (msg.quiet) { sendResponse({ ok: true }); return; }
-    await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
+    // v1.15.91：标已读只标成已打开（留列表里变灰），归档/删除才从列表拿掉。
+    if (msg.action === 'read') await markMessageOpenedInStoredAccount(msg.accountId, msg.messageId);
+    else await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
     sendResponse({ ok: true });
   })();
   return true;
@@ -1347,7 +1400,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!fn) { sendResponse({ ok: false, error: '未知操作' }); return; }
     const r = await fn(msg.accountId, msg.messageId);
     if (!r.ok) { sendResponse({ ok: false, error: r.error }); return; }
-    await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
+    // v1.15.91：标已读只标成已打开（留列表里变灰），归档/删除才从列表拿掉。
+    if (msg.action === 'read') await markMessageOpenedInStoredAccount(msg.accountId, msg.messageId);
+    else await dropMessageFromStoredAccount(msg.accountId, msg.messageId);
     sendResponse({ ok: true });
   })();
   return true;

@@ -44,8 +44,8 @@
  *    得到 Client ID（以 .apps.googleusercontent.com 结尾），内置在扩展里。
  * 2. 每个 Gmail 账号单独点“登录”：chrome.identity.launchWebAuthFlow 打开 Google 登录页，
  *    prompt=select_account + consent（强制选号），token 直接回在回调地址里，按账号存本地。
- * 3. 未读数走 GET /users/me/labels/INBOX（messagesUnread）；最近未读邮件走
- *    GET /users/me/messages?q=in:inbox（v1.15.85：不只查未读，查最近 20 封，客户端留未读+2 小时内新到的），再逐封取 metadata（From/Subject/Date/Message-ID）。
+ * 3. v1.15.89 起计数=列表里还没处理的新信数，不再调 labels 计数接口（机器人取信标已读后服务器数是 0）；
+ *    最近收到的邮件走 GET /users/me/messages?q=in:inbox（查最近 20 封），再并行取 metadata（From/Subject/Date/Message-ID，v1.15.90 并行化）。
  * 4. 写操作：标已读/归档走 POST /messages/{id}/modify（去 UNREAD/INBOX 标签），
  *    删除走 POST /messages/{id}/trash，回邮件/写邮件走 POST /messages/send（raw 是 RFC822 的 base64url）。
  *    旧 token 只有读权限时，未读照常查，但操作会提示重新登录授权一次（同 Outlook 的 needsRescope）。
@@ -639,20 +639,7 @@ async function checkGmailAccount(acc) {
   // 只在第一次发现 scope 旧了的时候记一行，别每分钟刷日志
   if (needsRescope && !acc.needsRescope) await diagLog(`[${who}] token 还是旧权限，未读照常查；回邮件/标已读要重新登录授权一次`);
   try {
-    const res = await fetch(G_API_BASE + '/users/me/labels/INBOX', {
-      headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
-    });
-    if (res.status === 401) {
-      await clearGmailAccessToken(acc.id);
-      await diagLog(`[${who}] Gmail API 查未读：HTTP 401，token 失效，点“登录”重新登录`);
-      return { ...acc, status: 'need-login', unread: acc.unread || 0, lastCheck: Date.now() };
-    }
-    if (!res.ok) {
-      await diagLog(`[${who}] Gmail API 查未读：HTTP ${res.status}`);
-      return { ...acc, status: 'error:' + res.status, unread: acc.unread || 0, lastCheck: Date.now() };
-    }
-    const data = await res.json();
-    let unread = Number.isFinite(data.messagesUnread) ? data.messagesUnread : 0;
+    // v1.15.90：不再调 labels 计数接口（计数=列表长度，服务器数已不用）；401 在取列表这步判。
     // 最近收到的邮件列表（带 ID，供弹窗里标已读/归档/删除/回复）
     // v1.15.88：只留 24 小时内新到的（最新收到），不跟旧列表合并。
     const dismissed = new Set(Array.isArray(acc.dismissed) ? acc.dismissed : []);
@@ -661,18 +648,23 @@ async function checkGmailAccount(acc) {
       const lres = await fetch(G_API_BASE + '/users/me/messages?q=' + encodeURIComponent('in:inbox') + '&maxResults=20', {
         headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
       });
+      if (lres.status === 401) {
+        await clearGmailAccessToken(acc.id);
+        await diagLog(`[${who}] Gmail API 取邮件列表：HTTP 401，token 失效，点“登录”重新登录`);
+        return { ...acc, status: 'need-login', unread: acc.unread || 0, lastCheck: Date.now() };
+      }
       if (lres.ok) {
         const ldata = await lres.json();
         const ids = (Array.isArray(ldata.messages) ? ldata.messages : []).slice(0, 20).map(m => m.id).filter(Boolean);
-        const details = [];
-        for (const id of ids) {
+        // v1.15.90：详情并行取（之前一封一封串行，20 封要 20 次往返，是一轮慢的主因）。
+        const details = (await Promise.all(ids.map(async (id) => {
           try {
             const dres = await fetch(G_API_BASE + '/users/me/messages/' + encodeURIComponent(id) + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-ID', {
               headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
             });
-            if (dres.ok) details.push(await dres.json());
-          } catch { /* 单封取失败就跳过 */ }
-        }
+            return dres.ok ? await dres.json() : null;
+          } catch { return null; /* 单封取失败就跳过 */ }
+        }))).filter(Boolean);
         // 给每封补上网页版链接（Gmail 网页版按 u/<序号> 分账号）
         const idx = acc.index ?? 0;
         // v1.15.88：只留 24 小时内新到的（最新收到）；以前的未读不进列表。
@@ -688,15 +680,7 @@ async function checkGmailAccount(acc) {
     }
     // v1.15.56：includeJunk 开时，连垃圾邮件（SPAM 标签）一起查（未读数加上，列表合并按时间倒序取前 10，带 spam 标记）
     if ((await getSettings()).includeJunk) {
-      try {
-        const sres = await fetch(G_API_BASE + '/users/me/labels/SPAM', {
-          headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
-        });
-        if (sres.ok) {
-          const sdata = await sres.json();
-          unread += Number.isFinite(sdata.messagesUnread) ? sdata.messagesUnread : 0;
-        }
-      } catch { /* SPAM 标签取不到就不算，不影响收件箱 */ }
+      // v1.15.90：不再调 SPAM labels 计数接口（计数=列表长度，服务器数已不用）。
       try {
         // v1.15.83：Gmail API 默认静默排除 SPAM/TRASH（includeSpamTrash 默认 false），
         // 哪怕 q 里写了 in:spam 也会被丢掉、不报错——必须显式加 includeSpamTrash=true。
@@ -706,15 +690,15 @@ async function checkGmailAccount(acc) {
         if (lres.ok) {
           const ldata = await lres.json();
           const ids = (Array.isArray(ldata.messages) ? ldata.messages : []).slice(0, 20).map(m => m.id).filter(Boolean);
-          const details = [];
-          for (const id of ids) {
+          // v1.15.90：垃圾详情也并行取。
+          const details = (await Promise.all(ids.map(async (id) => {
             try {
               const dres = await fetch(G_API_BASE + '/users/me/messages/' + encodeURIComponent(id) + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-ID', {
                 headers: { 'Authorization': 'Bearer ' + tok.accessToken, 'Accept': 'application/json' },
               });
-              if (dres.ok) details.push(await dres.json());
-            } catch { /* 单封取失败就跳过 */ }
-          }
+              return dres.ok ? await dres.json() : null;
+            } catch { return null; /* 单封取失败就跳过 */ }
+          }))).filter(Boolean);
           const idx = acc.index ?? 0;
           // v1.15.85：同上，留未读的 + 2 小时内新到的
           const spamMsgs = parseGmailMessages(details).map(m => ({
@@ -734,8 +718,11 @@ async function checkGmailAccount(acc) {
     const messages = dedupeMessages(fresh).filter(m => !dismissed.has(m.id))
       .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0))
       .slice(0, 10);
+    // v1.15.91：把旧列表里已打开的标记带回来（打开过的留列表里变灰）；计数只算没打开的。
+    const openedIds = new Set((acc.messages || []).filter(m => m.opened).map(m => m.id));
+    for (const m of messages) if (openedIds.has(m.id)) m.opened = true;
     // v1.15.89：计数 = 列表里还没处理的新信数，不认服务器未读数（机器人取信标已读后服务器数是 0）。
-    return { ...acc, unread: messages.length, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
+    return { ...acc, unread: messages.filter(m => !m.opened).length, messages, needsRescope, status: 'ok', lastCheck: Date.now() };
   } catch (e) {
     await diagLog(`[${who}] Gmail API 查未读异常：${String((e && e.message) || e)}`);
     return { ...acc, status: 'error:' + ((e && e.message) || 'fetch-failed'), lastCheck: Date.now() };
